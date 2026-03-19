@@ -45,6 +45,11 @@ async function loadApprovedProposals() {
   if (!v) return [];
   return Object.values(v).filter(p=>p.status==="已納入");
 }
+async function loadWorkReports() {
+  const v = await fbLoad("work_reports/all"); 
+  if (!v) return [];
+  return Object.values(v).sort((a,b) => (a.name||"").localeCompare(b.name||"","zh"));
+}
 async function loadArchiveIndex() { const v = await fbLoad("agenda/index"); return v||[]; }
 async function saveArchive(record) {
   const key = `agenda/archives/${record.id}`;
@@ -99,7 +104,20 @@ async function fileToBase64(file) {
 }
 function parseJSON(t,fb){try{return JSON.parse(t.replace(/```json\n?|```/g,"").trim());}catch{return fb;}}
 async function extractMinutes(file) {
-  const prompt=`請從這份會議紀錄中擷取資訊，以 JSON 格式回傳：{"managedItems":[{"id":"m1","source":"來源","caseTitle":"案由","content":"決議摘要","status":"辦理情形摘要","isManaged":true}],"newItems":[{"id":"n1","source":"來源","caseTitle":"案由","content":"摘要","needsManagement":true,"reason":"理由"}]}`;
+  const prompt=`請從這份會議紀錄中擷取資訊，以 JSON 格式回傳，不要有其他文字：
+{
+  "managedItems": [
+    {"id":"m1","source":"來源（例：第十次臨時動議二）","caseTitle":"案由","content":"決議事項摘要","status":"目前辦理情形摘要","isManaged":true}
+  ],
+  "newItems": [
+    {"id":"n1","source":"來源（例：報告事項一、討論事項第X案、臨時動議第X案）","caseTitle":"案由","content":"決議或重要內容摘要","needsManagement":true,"reason":"來源類型"}
+  ]
+}
+
+擷取規則：
+1. managedItems：找出「追蹤辦理情形」或「決議辦理情形」欄位中，有勾選「繼續列管」（☑繼續列管 或 ■繼續列管）的所有項目，isManaged 設為 true。
+2. newItems：找出本次會議的「報告事項」「討論事項」「臨時動議」中的所有案件，全部列入，needsManagement 設為 true，reason 填入該項目屬於哪個類型（報告事項/討論事項/臨時動議）。
+3. 兩個陣列都盡量完整，不要遺漏任何項目。`;
   if(file.name.toLowerCase().endsWith(".pdf")){
     const b64=await fileToBase64(file);
     const res=await fetch(API,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:1000,messages:[{role:"user",content:[{type:"document",source:{type:"base64",media_type:"application/pdf",data:b64}},{type:"text",text:prompt}]}]})});
@@ -152,27 +170,57 @@ const S={
 
 
 
+
 function ImeInput({value, onChange, placeholder, type="text", style: sx}) {
-  const ref = React.useRef(null);
-  const composing = React.useRef(false);
-  // Only set value from outside when not focused
+  const id = React.useRef("ime_" + Math.random().toString(36).slice(2));
   React.useEffect(() => {
-    if (ref.current && ref.current !== document.activeElement) {
-      ref.current.value = value || "";
-    }
-  }, [value]);
-  return <input
-    ref={ref}
-    type={type}
-    defaultValue={value||""}
-    placeholder={placeholder}
-    style={sx}
-    onCompositionStart={() => { composing.current = true; }}
-    onCompositionEnd={e => { composing.current = false; onChange(e.target.value); }}
-    onInput={e => { if (!composing.current) onChange(e.target.value); }}
-  />;
+    const el = document.getElementById(id.current);
+    if (el && el !== document.activeElement) el.value = value || "";
+  });
+  React.useEffect(() => {
+    const el = document.getElementById(id.current);
+    if (!el) return;
+    let composing = false;
+    const onCS = () => composing = true;
+    const onCE = e => { composing = false; onChange(e.target.value); };
+    const onInput = e => { if (!composing) onChange(e.target.value); };
+    el.addEventListener("compositionstart", onCS);
+    el.addEventListener("compositionend", onCE);
+    el.addEventListener("input", onInput);
+    return () => {
+      el.removeEventListener("compositionstart", onCS);
+      el.removeEventListener("compositionend", onCE);
+      el.removeEventListener("input", onInput);
+    };
+  }, []);
+  const styleStr = sx ? Object.entries(sx).map(([k,v])=>`${k.replace(/([A-Z])/g,'-$1').toLowerCase()}:${v}`).join(';') : '';
+  return <input id={id.current} type={type} defaultValue={value||""} placeholder={placeholder||""} style={sx} />;
 }
 function ImeTarea({value, onChange, placeholder, rows=5, style: sx}) {
+  const id = React.useRef("ime_" + Math.random().toString(36).slice(2));
+  React.useEffect(() => {
+    const el = document.getElementById(id.current);
+    if (el && el !== document.activeElement) el.value = value || "";
+  });
+  React.useEffect(() => {
+    const el = document.getElementById(id.current);
+    if (!el) return;
+    let composing = false;
+    const onCS = () => composing = true;
+    const onCE = e => { composing = false; onChange(e.target.value); };
+    const onInput = e => { if (!composing) onChange(e.target.value); };
+    el.addEventListener("compositionstart", onCS);
+    el.addEventListener("compositionend", onCE);
+    el.addEventListener("input", onInput);
+    return () => {
+      el.removeEventListener("compositionstart", onCS);
+      el.removeEventListener("compositionend", onCE);
+      el.removeEventListener("input", onInput);
+    };
+  }, []);
+  return <textarea id={id.current} defaultValue={value||""} placeholder={placeholder||""} rows={rows} style={sx} />;
+}
+) {
   const ref = React.useRef(null);
   const composing = React.useRef(false);
   React.useEffect(() => {
@@ -280,52 +328,432 @@ function AgendaForm({info,onChange}) {
 }
 
 // Default clinics
-const DEFAULT_CLINICS=[
-  {id:"c01",group:"自有營養師",name:"王永良診所",teachTime:"2/5(四)10:00",eSig:true,nutrition:true,coupon:true,consultation:true,openCount:26,execCount:4,note:"每兩個月一次的週五下午 營養師：邱淑娟"},
-  {id:"c02",group:"自有營養師",name:"榮陽安心診所",teachTime:"2/6(五)10:00",eSig:true,nutrition:true,coupon:true,consultation:true,openCount:37,execCount:4,note:"每週三四五上午 營養師：蔡佳樺"},
-  {id:"c03",group:"自有營養師",name:"王志靈內科診所",teachTime:"2/10(二)11:00",eSig:true,nutrition:true,coupon:true,consultation:true,openCount:20,execCount:1,note:"待完成職登"},
-  {id:"c04",group:"已媒合",name:"洪耳鼻喉科診所",teachTime:"-",eSig:false,nutrition:true,coupon:true,consultation:true,openCount:691,execCount:253,note:"每週六上午 營養師：石偊靖"},
-  {id:"c05",group:"已媒合",name:"永安家庭醫學科診所",teachTime:"2/5(四)13:00",eSig:true,nutrition:true,coupon:true,consultation:true,openCount:72,execCount:8,note:"每週四下午 營養師：邱詩芸"},
-  {id:"c06",group:"已媒合",name:"石牌鄭身心醫學診所",teachTime:"2/6(五)11:00",eSig:true,nutrition:true,coupon:true,consultation:true,openCount:76,execCount:7,note:"每個月第一週的週四上午 營養師：官彧"},
-  {id:"c07",group:"已媒合",name:"蔡秉勳小兒科診所",teachTime:"2/11(三)13:00",eSig:true,nutrition:true,coupon:true,consultation:true,openCount:296,execCount:2,note:"每個月第三週的週四上午 營養師：官彧"},
-  {id:"c08",group:"已媒合",name:"翰譽診所",teachTime:"2/12(四)14:00",eSig:true,nutrition:true,coupon:true,consultation:true,openCount:48,execCount:14,note:"4/15上午9點至12點首次駐點 營養師：官彧"},
-  {id:"c09",group:"已媒合",name:"台北欣安耳鼻喉科",teachTime:"2/5(四)14:00",eSig:true,nutrition:true,coupon:false,consultation:true,openCount:44,execCount:0,note:"3/25上午9點至11點首次駐點 營養師：官彧"},
-  {id:"c10",group:"有空間待媒合",name:"何叔芳小兒科診所",teachTime:"2/11(三)14:00",eSig:true,nutrition:true,coupon:true,consultation:true,openCount:36,execCount:6,note:"待安排"},
-  {id:"c11",group:"有空間待媒合",name:"清田婦產科家醫科診所",teachTime:"3/4(三)15:00",eSig:true,nutrition:true,coupon:true,consultation:true,openCount:12,execCount:0,note:"待收案數增加再媒合"},
-  {id:"c12",group:"有空間待媒合",name:"洪志淳皮膚科診所",teachTime:"3/5(四)13:00",eSig:true,nutrition:true,coupon:true,consultation:true,openCount:20,execCount:0,note:"可安排週一上午"},
-  {id:"c13",group:"無空間",name:"陳獻明小兒科",teachTime:"2/6(五)13:00",eSig:true,nutrition:true,coupon:true,consultation:true,openCount:32,execCount:0,note:"無空間"},
-  {id:"c14",group:"無空間",name:"杏華診所",teachTime:"2/9(一)10:00",eSig:true,nutrition:true,coupon:true,consultation:true,openCount:32,execCount:0,note:"無空間"},
-  {id:"c15",group:"無空間",name:"慧捷診所",teachTime:"2/10(二)14:00",eSig:true,nutrition:true,coupon:true,consultation:true,openCount:0,execCount:0,note:"無空間"},
-  {id:"c16",group:"無空間",name:"昱德聯合診所",teachTime:"3/4(三)15:00",eSig:true,nutrition:true,coupon:true,consultation:true,openCount:24,execCount:6,note:"無空間"},
-  {id:"c17",group:"無空間",name:"臻心復健科診所",teachTime:"3/5(四)15:00",eSig:true,nutrition:true,coupon:true,consultation:true,openCount:16,execCount:0,note:"無空間"},
-];
 
-function buildWordHTML(info, prescStats, clinics, tracked, proposals) {
+// ── Course Excel parser ───────────────────────────────────────
+async function parseCourseExcel(file) {
+  return new Promise((res,rej)=>{
+    const r=new FileReader();
+    r.onload=e=>{
+      try {
+        const wb=XLSX.read(e.target.result,{type:"array"});
+        const ws=wb.Sheets[wb.SheetNames[0]];
+        const rows=XLSX.utils.sheet_to_json(ws,{header:1,defval:""});
+        res(rows);
+      } catch(err){rej(err);}
+    };
+    r.onerror=rej; r.readAsArrayBuffer(file);
+  });
+}
+
+async function parseCoursesToSchedule(rows) {
+  // Build a text representation and ask Claude to format it
+  const header = rows[0] || [];
+  const dataRows = rows.slice(1).filter(r => r.some(c => c !== ""));
+  const text = [header.join("\t"), ...dataRows.map(r => r.join("\t"))].join("\n");
+  const res = await fetch(API, {
+    method:"POST", headers:{"Content-Type":"application/json"},
+    body: JSON.stringify({
+      model:"claude-sonnet-4-20250514", max_tokens:1000,
+      messages:[{role:"user", content:`以下是課程資料（TSV格式）：\n\n${text}\n\n請將這些課程資料整理成一個 JSON 陣列，每個元素代表一個課程：\n[{"name":"課程名稱","instructor":"講師","weekday":"星期幾（一二三四五六日）","time":"時間（例：14:00-15:30）","location":"地點","dates":"日期（例：3/4, 3/11, 3/18）","type":"運動處方或營養處方或社會處方或情緒調適處方","description":"課程說明"}]\n只回傳 JSON 陣列，不要其他文字。`}]
+    })
+  });
+  const d = await res.json();
+  try { return JSON.parse((d.content?.[0]?.text??"[]").replace(/```json\n?|```/g,"").trim()); }
+  catch { return []; }
+}
+
+// ── Firebase: save/load section data ─────────────────────────
+async function loadSectionData(key) {
+  const v = await fbLoad(`agenda_sections/${key}`); return v || null;
+}
+async function saveSectionData(key, data) {
+  await fbSave(`agenda_sections/${key}`, data);
+}
+
+// ── PersistSection: reusable component for sections 5-9 and schedules ──
+function PersistSection({ title, sectionKey, columns, defaultRow, renderRow, onDataChange }) {
+  const [rows, setRows] = useState([]);
+  const [loaded, setLoaded] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [lastSaved, setLastSaved] = useState(null);
+
+  useEffect(() => {
+    loadSectionData(sectionKey).then(data => {
+      if (data && Array.isArray(data)) {
+        setRows(data.map(r => ({ ...r, _keep: r._keep !== false })));
+      } else {
+        setRows([{ ...defaultRow, _keep: true, _id: Date.now() }]);
+      }
+      setLoaded(true);
+    });
+  }, [sectionKey]);
+
+  useEffect(() => {
+    if (loaded) onDataChange(rows.filter(r => r._keep));
+  }, [rows, loaded]);
+
+  const addRow = () => setRows(prev => [...prev, { ...defaultRow, _keep: true, _id: Date.now() + Math.random() }]);
+  const updateRow = (i, field, val) => setRows(prev => { const n=[...prev]; n[i]={...n[i],[field]:val}; return n; });
+  const removeRow = (i) => setRows(prev => prev.filter((_,j)=>j!==i));
+
+  const handleSave = async () => {
+    setSaving(true);
+    await saveSectionData(sectionKey, rows);
+    setLastSaved(new Date().toLocaleTimeString("zh-TW"));
+    setSaving(false);
+  };
+
+  if (!loaded) return <div style={{color:"#888",fontSize:12,padding:8}}>載入中…</div>;
+
+  return (
+    <div style={{marginBottom:16}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+        <div style={{fontSize:12,color:"#555"}}>
+          {lastSaved && <span style={{color:"#2e7d32",fontSize:11}}>✓ 已儲存 {lastSaved}</span>}
+        </div>
+        <div style={{display:"flex",gap:8}}>
+          <button style={{...S.btnS(),fontSize:11}} onClick={addRow}>＋ 新增列</button>
+          <button style={{...S.btnS("#2e7d32"),fontSize:11}} onClick={handleSave} disabled={saving}>
+            {saving?"儲存中…":"💾 儲存至雲端"}
+          </button>
+        </div>
+      </div>
+      <div style={{overflowX:"auto"}}>
+        <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+          <thead>
+            <tr>
+              <th style={{background:"#2c2416",color:"#e8dfc8",padding:"5px 8px",border:"1px solid #555",width:40,textAlign:"center",fontSize:11}}>保留</th>
+              {columns.map(c=><th key={c.key} style={{background:"#2c2416",color:"#e8dfc8",padding:"5px 8px",border:"1px solid #555",fontSize:11,whiteSpace:"nowrap"}}>{c.label}</th>)}
+              <th style={{background:"#2c2416",color:"#e8dfc8",padding:"5px 8px",border:"1px solid #555",width:40,fontSize:11}}>刪除</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row,i)=>(
+              <tr key={row._id||i} style={{background:row._keep?"white":"#f5f5f5",opacity:row._keep?1:0.5}}>
+                <td style={{textAlign:"center",border:"1px solid #ddd",padding:"4px"}}>
+                  <input type="checkbox" checked={!!row._keep} onChange={e=>updateRow(i,"_keep",e.target.checked)}/>
+                </td>
+                {columns.map(c=>(
+                  <td key={c.key} style={{border:"1px solid #ddd",padding:"2px 4px"}}>
+                    {c.type==="select"
+                      ? <select value={row[c.key]||""} onChange={e=>updateRow(i,c.key,e.target.value)}
+                          style={{width:"100%",border:"none",fontSize:11,background:"transparent",fontFamily:"inherit"}}>
+                          {c.options.map(o=><option key={o} value={o}>{o}</option>)}
+                        </select>
+                      : <input value={row[c.key]||""} onChange={e=>updateRow(i,c.key,e.target.value)}
+                          style={{width:"100%",border:"none",fontSize:11,background:"transparent",fontFamily:"inherit"}}
+                          placeholder={c.placeholder||""}/>
+                    }
+                  </td>
+                ))}
+                <td style={{textAlign:"center",border:"1px solid #ddd",padding:"4px"}}>
+                  <button onClick={()=>removeRow(i)} style={{background:"none",border:"none",cursor:"pointer",color:"#aaa",fontSize:14}}>✕</button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+// ── CourseScheduleSection ────────────────────────────────────
+function CourseScheduleSection({ onDataChange }) {
+  const [courses, setCourses] = useState([]);
+  const [loading, setLoading] = useState("");
+  const [loaded, setLoaded] = useState(false);
+  const fileRef = useRef();
+
+  useEffect(() => {
+    loadSectionData("courses").then(data => {
+      if (data && Array.isArray(data)) setCourses(data);
+      setLoaded(true);
+    });
+  }, []);
+
+  useEffect(() => { if(loaded) onDataChange(courses); }, [courses, loaded]);
+
+  const handleExcel = async (file) => {
+    if (!file) return;
+    setLoading("解析課程 Excel…");
+    try {
+      const rows = await parseCourseExcel(file);
+      setLoading("AI 整理課程資料…");
+      const parsed = await parseCoursesToSchedule(rows);
+      if (parsed.length > 0) {
+        setCourses(parsed.map((c,i)=>({...c, _id: Date.now()+i, _keep:true})));
+      } else {
+        alert("無法解析課程資料，請確認 Excel 格式");
+      }
+    } catch(e) { alert("解析失敗："+e.message); }
+    setLoading("");
+  };
+
+  const downloadTemplate = () => {
+    const ws_data = [
+      ["課程名稱","講師","星期","時間","地點","日期（逗號分隔）","類型","課程說明"],
+      ["養生太極","龔一誠","二","14:00-16:00","北投社區大學503教室","3/3, 3/10, 3/17, 3/24, 3/31","運動處方","養生太極是綜合太極拳基本功法和養生氣功"],
+      ["艾揚格瑜伽基礎+修復","詹國群","一","19:30-21:00","瑜伽之光北投館","3/2, 3/9, 3/16, 3/23, 3/30","運動處方",""],
+    ];
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.aoa_to_sheet(ws_data);
+    ws['!cols'] = [{wch:20},{wch:12},{wch:6},{wch:15},{wch:25},{wch:30},{wch:12},{wch:40}];
+    XLSX.utils.book_append_sheet(wb, ws, "課程資料");
+    XLSX.writeFile(wb, "課程資料範本.xlsx");
+  };
+
+  const updateCourse = (i, field, val) => setCourses(prev => { const n=[...prev]; n[i]={...n[i],[field]:val}; return n; });
+  const addCourse = () => setCourses(prev=>[...prev,{name:"",instructor:"",weekday:"",time:"",location:"",dates:"",type:"運動處方",description:"",_keep:true,_id:Date.now()}]);
+  const removeCourse = (i) => setCourses(prev=>prev.filter((_,j)=>j!==i));
+
+  const handleSave = async () => {
+    await saveSectionData("courses", courses);
+    alert("✓ 課程資料已儲存");
+  };
+
+  const TYPES = ["運動處方","營養處方","社會處方","情緒調適處方"];
+
+  return (
+    <div>
+      <div style={{display:"flex",gap:8,marginBottom:12,flexWrap:"wrap",alignItems:"center"}}>
+        <div style={{...S.drop,padding:"14px 20px",flex:1,minWidth:200,display:"flex",alignItems:"center",gap:12}}
+          onDragOver={e=>e.preventDefault()} onDrop={e=>{e.preventDefault();handleExcel(e.dataTransfer.files[0]);}}
+          onClick={()=>fileRef.current?.click()}>
+          <span style={{fontSize:20}}>📊</span>
+          <div>
+            <div style={{fontWeight:700,fontSize:13}}>上傳課程 Excel</div>
+            <div style={{fontSize:11,color:"#888"}}>AI 自動解析整理成課程表</div>
+          </div>
+          <input ref={fileRef} type="file" accept=".xlsx,.xls" style={{display:"none"}} onChange={e=>{handleExcel(e.target.files[0]);e.target.value="";}}/>
+        </div>
+        <div style={{display:"flex",flexDirection:"column",gap:6}}>
+          <button style={S.btnS("#1565c0")} onClick={downloadTemplate}>⬇ 下載 Excel 範本</button>
+          <button style={S.btnS()} onClick={addCourse}>＋ 手動新增課程</button>
+          <button style={{...S.btnS("#2e7d32")}} onClick={handleSave}>💾 儲存課程</button>
+        </div>
+      </div>
+      {loading && <div style={{color:"#8b6914",fontSize:12,marginBottom:8}}>⏳ {loading}</div>}
+      {courses.length > 0 && (
+        <div style={{overflowX:"auto"}}>
+          <table style={{width:"100%",borderCollapse:"collapse",fontSize:11,minWidth:700}}>
+            <thead>
+              <tr>{["保留","類型","課程名稱","講師","星期","時間","日期","地點","說明",""].map((h,i)=>(
+                <th key={i} style={{background:"#2c2416",color:"#e8dfc8",padding:"4px 6px",border:"1px solid #555",whiteSpace:"nowrap",textAlign:"center"}}>{h}</th>
+              ))}</tr>
+            </thead>
+            <tbody>
+              {courses.map((c,i)=>(
+                <tr key={c._id||i} style={{background:c._keep?"white":"#f5f5f5",opacity:c._keep?1:0.5}}>
+                  <td style={{textAlign:"center",border:"1px solid #ddd",padding:"3px"}}>
+                    <input type="checkbox" checked={!!c._keep} onChange={e=>updateCourse(i,"_keep",e.target.checked)}/>
+                  </td>
+                  {["type","name","instructor","weekday","time","dates","location","description"].map(f=>(
+                    <td key={f} style={{border:"1px solid #ddd",padding:"2px 4px"}}>
+                      {f==="type"
+                        ? <select value={c[f]||""} onChange={e=>updateCourse(i,f,e.target.value)}
+                            style={{width:"100%",border:"none",fontSize:11,background:"transparent",fontFamily:"inherit"}}>
+                            {TYPES.map(t=><option key={t}>{t}</option>)}
+                          </select>
+                        : <input value={c[f]||""} onChange={e=>updateCourse(i,f,e.target.value)}
+                            style={{width:"100%",border:"none",fontSize:11,background:"transparent",fontFamily:"inherit"}}/>
+                      }
+                    </td>
+                  ))}
+                  <td style={{textAlign:"center",border:"1px solid #ddd",padding:"3px"}}>
+                    <button onClick={()=>removeCourse(i)} style={{background:"none",border:"none",cursor:"pointer",color:"#aaa",fontSize:14}}>✕</button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Section column definitions ────────────────────────────────
+const PRESCRIPTION_DAY_COLS = [
+  {key:"time",label:"時間",placeholder:"例：13:00-13:50"},
+  {key:"section",label:"區塊",type:"select",options:["運動","社會","情緒調適","營養"]},
+  {key:"courseName",label:"課程名稱",placeholder:""},
+  {key:"instructor",label:"講師",placeholder:""},
+  {key:"location",label:"地點",placeholder:""},
+];
+const PRESCRIPTION_DAY_DEFAULT = {time:"",section:"運動",courseName:"",instructor:"",location:""};
+
+const UNINSTRUCTED_COLS = [
+  {key:"name",label:"姓名",placeholder:""},
+  {key:"type",label:"課程類型",type:"select",options:["運動","社會","情緒調適","營養","其他"]},
+  {key:"title",label:"職稱",placeholder:""},
+  {key:"unit",label:"推薦單位",placeholder:""},
+  {key:"plannedCourse",label:"預計開立課程",placeholder:""},
+];
+const UNINSTRUCTED_DEFAULT = {name:"",type:"運動",title:"",unit:"",plannedCourse:""};
+
+const VENUE_COLS = [
+  {key:"name",label:"場地名稱",placeholder:""},
+  {key:"rent",label:"租金",placeholder:""},
+  {key:"size",label:"空間大小",placeholder:""},
+  {key:"equipment",label:"提供器材",placeholder:""},
+  {key:"note",label:"備註",placeholder:""},
+];
+const VENUE_DEFAULT = {name:"",rent:"",size:"",equipment:"",note:""};
+
+const POTENTIAL_COURSE_COLS = [
+  {key:"name",label:"課程名稱",placeholder:""},
+  {key:"instructor",label:"講師",placeholder:""},
+  {key:"type",label:"類型",type:"select",options:["運動處方","營養處方","社會處方","情緒調適處方"]},
+  {key:"status",label:"狀態",type:"select",options:["評估中","可直接開課","需再確認"]},
+  {key:"note",label:"備註",placeholder:""},
+];
+const POTENTIAL_COURSE_DEFAULT = {name:"",instructor:"",type:"運動處方",status:"評估中",note:""};
+
+const SCHEDULE_COLS = [
+  {key:"date",label:"時間",placeholder:"例：04月02日(三)14:00"},
+  {key:"name",label:"會議/活動名稱",placeholder:""},
+  {key:"location",label:"地點",placeholder:"待安排"},
+];
+const SCHEDULE_DEFAULT = {date:"",name:"",location:"待安排"};
+
+const VISIT_COLS = [
+  {key:"date",label:"時間",placeholder:"例：03月25日(三)10:20"},
+  {key:"unit",label:"拜會單位及人員",placeholder:""},
+  {key:"status",label:"執行狀況",type:"select",options:["未完成","已完成","取消"]},
+];
+const VISIT_DEFAULT = {date:"",unit:"",status:"未完成"};
+
+// ── buildWordHTML (full version) ──────────────────────────────
+function buildWordHTML(info, prescStats, clinics, tracked, proposals, sectionData) {
+  const sd = sectionData || {};
   const bySection=s=>proposals.filter(p=>p.include&&p.section===s);
   const GROUPS=["自有營養師","已媒合","有空間待媒合","無空間"];
   const diff=(cur,prev)=>{if(prev===undefined||prev===null||prev==="")return"";const c=typeof cur==="string"?parseFloat(cur):cur,p=typeof prev==="string"?parseFloat(prev):prev;if(isNaN(c)||isNaN(p))return"";const d=c-p;return d===0?"0":d>0?`+${typeof cur==="string"&&cur.includes("%")?d.toFixed(1)+"%":d}`:`${typeof cur==="string"&&cur.includes("%")?d.toFixed(1)+"%":d}`;};
   const presRows=prescStats?[...["運動處方","營養處方","社會處方","情緒調適處方"].map(k=>{const r=prescStats.rows.find(x=>x.label===k)||{open:0,exec:0,rate:"0%",prevOpen:0,prevExec:0,prevRate:"0%"};return{label:k,...r};}),{label:"total",isTotal:true,...prescStats.total}]:[];
-  const prescHTML=prescStats?`<table class="data-table"><tr class="hdr-row"><th rowspan="2" style="width:18%">健康處方類別</th><th colspan="3">處方數</th><th colspan="3">已執行處方數</th><th colspan="3">處方執行率</th></tr><tr class="hdr-row"><th>本週</th><th>上週</th><th>差異</th><th>本週</th><th>上週</th><th>差異</th><th>本週</th><th>上週</th><th>差異</th></tr>${presRows.map(r=>`<tr${r.isTotal?' class="total-row"':''}><td>${r.isTotal?"處方開立總數(各處方加總)":r.label}</td><td class="num">${r.open}</td><td class="num">${r.prevOpen||0}</td><td class="num">${diff(r.open,r.prevOpen||0)}</td><td class="num">${r.exec}</td><td class="num">${r.prevExec||0}</td><td class="num">${diff(r.exec,r.prevExec||0)}</td><td class="num">${r.rate}</td><td class="num">${r.prevRate||"0%"}</td><td class="num">${diff(r.rate,r.prevRate||"0%")}</td></tr>`).join("")}</table>`:"<p>（尚未上傳處方資料）</p>";
-  const clinicHTML=clinics.length>0?`<table class="data-table"><tr class="hdr-row"><th rowspan="2">分類</th><th rowspan="2">診所名稱</th><th rowspan="2" style="font-size:9pt">預計實地<br>教學時間</th><th rowspan="2" style="font-size:9pt">電子<br>簽章</th><th rowspan="2" style="font-size:9pt">營養<br>空間</th><th rowspan="2" style="font-size:9pt">禮券</th><th colspan="3" style="font-size:9pt">處方數量</th><th rowspan="2">備註</th></tr><tr class="hdr-row"><th style="font-size:9pt">開立</th><th style="font-size:9pt">執行</th><th style="font-size:9pt">營養諮詢</th></tr>${GROUPS.map(grp=>{const items=clinics.filter(c=>c.group===grp);if(!items.length)return"";return items.map((c,i)=>`<tr>${i===0?`<td rowspan="${items.length}" class="grp-cell">${grp}</td>`:""}<td>${c.name}</td><td class="num">${c.teachTime}</td><td class="num">${c.eSig?"V":""}</td><td class="num">${c.nutrition?"V":""}</td><td class="num">${c.coupon?"V":""}</td><td class="num bold">${c.openCount}</td><td class="num bold">${c.execCount}</td><td class="num">${c.consultation?"V":""}</td><td style="font-size:9pt">${c.note||""}</td></tr>`).join("");}).join("")}</table>`:"<p>（尚未設定診所資料）</p>";
+
+  // ① 處方統計表
+  const prescHTML=prescStats?`<table class="dt2"><tr class="hdr"><th rowspan="2" style="width:20%">健康處方類別</th><th colspan="3">處方數</th><th colspan="3">已執行處方數</th><th colspan="3">處方執行率</th></tr><tr class="hdr"><th>本週</th><th>上週</th><th>差異</th><th>本週</th><th>上週</th><th>差異</th><th>本週</th><th>上週</th><th>差異</th></tr>${presRows.map(r=>`<tr${r.isTotal?' class="tot"':''}><td>${r.isTotal?"處方開立總數(各處方加總)":r.label}</td><td class="c">${r.open}</td><td class="c">${r.prevOpen||0}</td><td class="c">${diff(r.open,r.prevOpen||0)}</td><td class="c">${r.exec}</td><td class="c">${r.prevExec||0}</td><td class="c">${diff(r.exec,r.prevExec||0)}</td><td class="c">${r.rate}</td><td class="c">${r.prevRate||"0%"}</td><td class="c">${diff(r.rate,r.prevRate||"0%")}</td></tr>`).join("")}</table>`:"<p>（尚未上傳處方資料）</p>";
+
+  // ② 診所拓點表
+  const clinicHTML=clinics.length>0?`<table class="dt2"><tr class="hdr"><th rowspan="2">分類</th><th rowspan="2">診所名稱</th><th rowspan="2">預計實地<br>教學時間</th><th rowspan="2">電子<br>簽章</th><th rowspan="2">營養<br>空間</th><th rowspan="2">禮券</th><th colspan="3">處方數量</th><th rowspan="2">備註</th></tr><tr class="hdr"><th>開立</th><th>執行</th><th>營養<br>諮詢</th></tr>${GROUPS.map(grp=>{const items=clinics.filter(c=>c.group===grp);if(!items.length)return"";return items.map((c,i)=>`<tr>${i===0?`<td rowspan="${items.length}" class="grp">${grp}</td>`:""}<td>${c.name}</td><td class="c">${c.teachTime}</td><td class="c">${c.eSig?"V":""}</td><td class="c">${c.nutrition?"V":""}</td><td class="c">${c.coupon?"V":""}</td><td class="c b">${c.openCount}</td><td class="c b">${c.execCount}</td><td class="c">${c.consultation?"V":""}</td><td class="sm">${c.note||""}</td></tr>`).join("");}).join("")}</table>`:"<p>（尚未設定診所資料）</p>";
+
+  // ③ 課程開設現況
+  const COURSE_TYPES = ["運動處方","社會處方","情緒調適處方","營養處方"];
+  const courses = (sd.courses||[]).filter(c=>c._keep!==false);
+  const courseHTML = courses.length>0 ? COURSE_TYPES.map(type=>{
+    const typeCourses = courses.filter(c=>c.type===type);
+    if(!typeCourses.length) return "";
+    return `<p style="margin:4pt 0 2pt;font-weight:bold">${type}</p>
+    <table class="dt2"><tr class="hdr"><th>課程名稱</th><th>講師</th><th>時間</th><th>日期</th><th>地點</th><th>課程說明</th></tr>
+    ${typeCourses.map(c=>`<tr><td>${c.name||""}</td><td class="c">${c.instructor||""}</td><td class="c">${c.weekday?c.weekday+"　":""} ${c.time||""}</td><td>${c.dates||""}</td><td>${c.location||""}</td><td class="sm">${c.description||""}</td></tr>`).join("")}
+    </table>`;
+  }).join("") : "<p>（尚未輸入課程資料）</p>";
+
+  // ⑤ 處方日課程表
+  const pdCourses = (sd.prescriptionDayCourses||[]).filter(r=>r._keep!==false);
+  const pdHTML = pdCourses.length>0 ? `<table class="dt2"><tr class="hdr"><th>時間</th><th>區塊</th><th>課程名稱</th><th>講師</th><th>地點</th></tr>${pdCourses.map(r=>`<tr><td class="c">${r.time||""}</td><td class="c">${r.section||""}</td><td>${r.courseName||""}</td><td class="c">${r.instructor||""}</td><td>${r.location||""}</td></tr>`).join("")}</table>` : "<p>（尚未輸入）</p>";
+
+  // ⑥ 未開課師資
+  const uninstr = (sd.uninstructed||[]).filter(r=>r._keep!==false);
+  const uninstrHTML = uninstr.length>0 ? `<table class="dt2"><tr class="hdr"><th>教師姓名</th><th>課程類型</th><th>職稱</th><th>推薦單位</th><th>預計開立課程</th></tr>${uninstr.map((r,i)=>`<tr><td>${i+1}. ${r.name||""}</td><td class="c">${r.type||""}</td><td>${r.title||""}</td><td>${r.unit||""}</td><td>${r.plannedCourse||""}</td></tr>`).join("")}</table>` : "<p>（尚未輸入）</p>";
+
+  // ⑦ 潛在場地
+  const venues = (sd.venues||[]).filter(r=>r._keep!==false);
+  const venueHTML = venues.length>0 ? `<table class="dt2"><tr class="hdr"><th>場地名稱</th><th>租金</th><th>空間大小</th><th>提供器材</th><th>備註</th></tr>${venues.map(r=>`<tr><td>${r.name||""}</td><td class="c">${r.rent||""}</td><td>${r.size||""}</td><td>${r.equipment||""}</td><td class="sm">${r.note||""}</td></tr>`).join("")}</table>` : "<p>（尚未輸入）</p>";
+
+  // ⑧⑨ 潛在課程/師資 & 未成功開課
+  const potCourses = (sd.potentialCourses||[]).filter(r=>r._keep!==false);
+  const potHTML = potCourses.length>0 ? `<table class="dt2"><tr class="hdr"><th>課程名稱</th><th>講師</th><th>類型</th><th>狀態</th><th>備註</th></tr>${potCourses.map(r=>`<tr><td>${r.name||""}</td><td class="c">${r.instructor||""}</td><td class="c">${r.type||""}</td><td class="c">${r.status||""}</td><td class="sm">${r.note||""}</td></tr>`).join("")}</table>` : "<p>（尚未輸入）</p>";
+
+  // 工作進度表
+  const workReports = sd.workReports || [];
+  const workHTML = workReports.length>0 ? `<table class="dt2"><tr class="hdr"><th>報告人</th><th>近期工作執行情形</th><th>未來工作重點規劃</th></tr>${workReports.map(r=>`<tr><td style="white-space:nowrap">${r.name||""}</td><td>${(r.recent||"").replace(/\n/g,"<br>")}</td><td>${(r.plan||"").replace(/\n/g,"<br>")}</td></tr>`).join("")}</table>` : "<p class='i1'>（尚未填寫工作進度）</p>";
+
+  // 重要時程
+  const schedules = (sd.schedules||[]).filter(r=>r._keep!==false);
+  const schedHTML = schedules.length>0 ? `<table class="dt2"><tr class="hdr"><th>時間</th><th>會議名稱</th><th>地點</th></tr>${schedules.map(r=>`<tr><td class="c">${r.date||""}</td><td>${r.name||""}</td><td>${r.location||""}</td></tr>`).join("")}</table>` : "<p>（無）</p>";
+
+  // 拜會時程
+  const visits = (sd.visits||[]).filter(r=>r._keep!==false);
+  const visitHTML = visits.length>0 ? `<table class="dt2"><tr class="hdr"><th>時間</th><th>拜會單位及人員</th><th>執行狀況</th></tr>${visits.map(r=>`<tr><td class="c">${r.date||""}</td><td>${r.unit||""}</td><td class="c">${r.status||""}</td></tr>`).join("")}</table>` : "<p>（無）</p>";
+
   const trackBlock=tracked.length===0?"<p class='i1'>（本次無列管追蹤事項）</p>":tracked.map(item=>`<div class='track'><p><b>【${item.source}】</b>案由：${item.caseTitle}</p><p>決議事項：${item.content}${item.status?`<br>上次辦理情形：${item.status}`:""}</p><p><b>本次辦理情形：</b>${item.mode==="decision"?"依決議辦理。":(item.customText?.trim()||"（待填寫）")}</p></div>`).join("");
-  const propBlock=(items,isD)=>items.map((p,i)=>`<div class='proposal'><p>第${cnums[i]||i+1}案　提案人：${p.proposer}</p><p>案由：${p.caseTitle}</p><table class='dt'><tbody><tr><td class='dl'>說　明：</td><td>${(p.description||"").replace(/\n/g,"<br>")}</td></tr>${isD?"<tr><td class='dl'>決　議：</td><td>&nbsp;<br>&nbsp;</td></tr>":""}</tbody></table></div>`).join("");
+  const propBlock=(items,isD)=>items.map((p,i)=>`<div class='proposal'><p>第${cnums[i]||i+1}案　提案人：${p.proposer}</p><p>案由：${p.caseTitle}</p><table class='dt1'><tbody><tr><td class='dl'>說　明：</td><td>${(p.description||"").replace(/\n/g,"<br>")}</td></tr>${isD?"<tr><td class='dl'>決　議：</td><td>&nbsp;<br>&nbsp;</td></tr>":""}</tbody></table></div>`).join("");
   const rpt=bySection("報告事項"),dis=bySection("討論事項"),urg=bySection("臨時動議");
-  return `<!DOCTYPE html><html lang="zh-TW"><head><meta charset="UTF-8"><style>@page{size:A4;margin:2cm 2.5cm}body{font-family:"標楷體","DFKai-SB",serif;font-size:11pt;line-height:2;color:#000;margin:0}h1{font-size:13pt;text-align:center;font-weight:bold;margin:0;line-height:2.2}h2{font-size:12pt;font-weight:bold;margin:12pt 0 2pt}h3{font-size:11pt;font-weight:bold;margin:8pt 0 2pt;margin-left:1em}p{margin:1pt 0}.ctr{text-align:center;font-size:10pt}hr{border:none;border-top:2px solid #000;margin:8pt 0}.i1{margin-left:2em}.track{border:1px solid #aaa;padding:5pt 8pt;margin:6pt 0}.track p{margin:1pt 0;font-size:10pt;line-height:1.9}.proposal{margin:8pt 0 8pt 1em}.proposal p{margin:1pt 0}.dt{width:100%;border:none;border-collapse:collapse}.dt td{border:none;vertical-align:top;padding:1pt 3pt;font-size:10pt;line-height:1.9}.dl{white-space:nowrap;font-weight:bold;width:5em}.data-table{width:100%;border-collapse:collapse;font-size:9pt;margin:6pt 0}.data-table td,.data-table th{border:1px solid #888;padding:3pt 5pt;vertical-align:middle}.hdr-row th{background:#2c2416;color:#e8dfc8;text-align:center;font-weight:bold}.total-row{background:#f5f0e8;font-weight:bold}.grp-cell{text-align:center;font-weight:bold;background:#f5f0e8;font-size:9pt}.num{text-align:center}.bold{font-weight:bold}</style></head><body>
-<h1>${info.org}</h1><h1>${info.subtitle}</h1><h1>${info.meetingNo}內部工作會議${info.theme?`：${info.theme}`:""}　會議議程</h1>
-<p class="ctr">時間：${info.date}（星期${info.weekday}）${info.time}</p><p class="ctr">地點：${info.location}</p><p class="ctr">主席：${info.chair}</p><hr/>
+
+  return `<!DOCTYPE html>
+<html lang="zh-TW"><head><meta charset="UTF-8">
+<style>
+@page { size: A4; margin: 2.5cm 3cm 2.5cm 3cm; }
+body { font-family: "標楷體","DFKai-SB","BiauKai",serif; font-size: 12pt; line-height: 2.0; color: #000; margin: 0; }
+h1 { font-size: 14pt; text-align: center; font-weight: bold; margin: 0; line-height: 2.0; }
+h2 { font-size: 13pt; font-weight: bold; margin: 14pt 0 0; text-indent: 0; }
+h3 { font-size: 12pt; font-weight: normal; margin: 4pt 0 2pt; text-indent: 2em; }
+p { margin: 0; line-height: 2.0; }
+.ctr { text-align: center; }
+.i1 { text-indent: 2em; }
+.i2 { text-indent: 4em; }
+hr { border: none; border-top: 1.5pt solid #000; margin: 8pt 0; }
+.track { border: 1pt solid #aaa; padding: 4pt 8pt; margin: 4pt 2em; }
+.track p { line-height: 1.8; font-size: 11pt; }
+.proposal { margin: 6pt 0 6pt 2em; }
+.proposal p { line-height: 1.8; }
+.dt1 { width: 100%; border: none; border-collapse: collapse; }
+.dt1 td { border: none; vertical-align: top; padding: 0 4pt; font-size: 11pt; line-height: 1.8; }
+.dl { white-space: nowrap; font-weight: bold; width: 5em; }
+.dt2 { width: 100%; border-collapse: collapse; font-size: 10pt; margin: 4pt 2em 6pt; width: calc(100% - 2em); }
+.dt2 td, .dt2 th { border: 0.5pt solid #888; padding: 2pt 5pt; vertical-align: middle; line-height: 1.6; }
+.hdr th { background: #2c2416; color: #fff; text-align: center; font-weight: bold; }
+.tot { background: #f5f0e8; font-weight: bold; }
+.grp { text-align: center; font-weight: bold; background: #f5f0e8; }
+.c { text-align: center; }
+.b { font-weight: bold; }
+.sm { font-size: 9pt; }
+</style></head><body>
+<h1>${info.org}</h1>
+<h1>${info.subtitle}</h1>
+<h1>${info.meetingNo}內部工作會議${info.theme?`：${info.theme}`:""}　會議議程</h1>
+<p class="ctr">時間：${info.date}（星期${info.weekday}）${info.time}</p>
+<p class="ctr">地點：${info.location}</p>
+<p class="ctr">主席：${info.chair}</p>
+<hr/>
 <h2>壹、主席致詞</h2>
 <h2>貳、計畫推動現況</h2>
-<h3>一、現行健康處方開立及執行情形${info.dataDate?`（截至 ${info.dataDate}）`:""}</h3>${prescHTML}
-<h3>二、目前診所拓點現況${info.dataDate?`（截至 ${info.dataDate}）`:""}</h3>${clinicHTML}
-<h3>三、目前課程開設現況</h3><h3>四、本月份健康處方課程表</h3><h3>五、處方活動日課程表</h3><h3>六、曾參與說明會但未開課教師名單</h3><h3>七、潛在場地列表</h3><h3>八、潛在課程及師資列表</h3><h3>九、未成功開課及可直接開課之課程列表</h3>
-<h2>參、確認歷次健康台灣深耕計畫會議紀錄暨決議辦理情形</h2>${trackBlock}
-<h2>肆、報告事項</h2><p class="i1">一、請各位同仁報告上週工作內容及未來一週工作規劃，報告內容如下表：</p>${rpt.length>0?propBlock(rpt,false):""}<p class="i1">二、重要會議及活動時程</p><p class="i1">三、拜會處方執行相關單位時程</p>
-<h2>伍、討論事項</h2>${dis.length===0?"<p class='i1'>（無）</p>":propBlock(dis,true)}
-<h2>陸、臨時動議</h2>${urg.length===0?"<p class='i1'>（無）</p>":propBlock(urg,true)}
-<h2>柒、散會</h2></body></html>`;
+<h3>一、現行健康處方開立及執行情形${info.dataDate?`（截至 ${info.dataDate}）`:""}</h3>
+${prescHTML}
+<h3>二、目前診所拓點現況${info.dataDate?`（截至 ${info.dataDate}）`:""}</h3>
+${clinicHTML}
+<h3>三、目前課程開設現況</h3>
+${courseHTML}
+<h3>四、本月份健康處方課程表</h3>
+<h3>五、處方活動日課程表</h3>
+${pdHTML}
+<h3>六、曾參與說明會但未開課教師名單</h3>
+${uninstrHTML}
+<h3>七、潛在場地列表</h3>
+${venueHTML}
+<h3>八、潛在課程及師資列表</h3>
+${potHTML}
+<h3>九、未成功開課及可直接開課之課程列表</h3>
+${potHTML}
+<h2>參、確認歷次健康台灣深耕計畫會議紀錄暨決議辦理情形</h2>
+${trackBlock}
+<h2>肆、報告事項</h2>
+<h3>一、請各位同仁報告上週工作內容及未來一週工作規劃，報告內容如下表：</h3>
+${workHTML}
+${rpt.length>0?propBlock(rpt,false):""}
+<h3>二、重要會議及活動時程</h3>
+${schedHTML}
+<h3>三、拜會處方執行相關單位時程</h3>
+${visitHTML}
+<h2>伍、討論事項</h2>
+${dis.length===0?"<p class='i1'>（無）</p>":propBlock(dis,true)}
+<h2>陸、臨時動議</h2>
+${urg.length===0?"<p class='i1'>（無）</p>":propBlock(urg,true)}
+<h2>柒、散會</h2>
+</body></html>`;
 }
-
-const STEPS=["上傳紀錄","議程資訊","計畫現況","列管事項","提案整合","預覽下載"];
 
 function App() {
   const [step,setStep]=useState(0);
@@ -343,6 +771,13 @@ function App() {
   const [cutoffThis,setCutoffThis]=useState("");
   const [cutoffLast,setCutoffLast]=useState("");
   const [clinics,setClinics]=useState(DEFAULT_CLINICS);
+  const [sectionData,setSectionData]=useState({});
+  const [workReports,setWorkReports]=useState([]);
+
+  useEffect(()=>{
+    loadWorkReports().then(r=>{ setSectionData(prev=>({...prev,workReports:r})); setWorkReports(r); });
+  },[]);
+  const updateSection=(key,data)=>setSectionData(prev=>({...prev,[key]:data}));
   const [managed,setManaged]=useState([]);
   const [suggested,setSuggested]=useState([]);
   const [proposals,setProposals]=useState([]);
@@ -383,7 +818,7 @@ function App() {
 
   const handleGenerate=async()=>{
     const tracked=[...managed.filter(i=>i.include),...suggested.filter(i=>i.include)];
-    const html=buildWordHTML(info,prescStats,clinics,tracked,proposals);
+    const html=buildWordHTML(info,prescStats,clinics,tracked,proposals,sectionData);
     const blob=new Blob(["\ufeff"+html],{type:"application/msword;charset=utf-8"});
     const url=URL.createObjectURL(blob);const a=document.createElement("a");a.href=url;a.download=`${info.meetingNo}內部工作會議議程.doc`;a.click();URL.revokeObjectURL(url);
     try{const record={id:`agenda_${Date.now()}`,title:`${info.meetingNo}內部工作會議`,date:info.date,createdAt:new Date().toISOString(),info,tracked,proposals:proposals.filter(p=>p.include),hasPrescStats:!!prescStats};await saveArchive(record);}catch(e){console.warn("存檔失敗",e);}
@@ -446,39 +881,39 @@ function App() {
           {/* S2 */}
           {step===2&&<>
             <div style={S.card}><div style={S.ch("#2e5d2e")}>步驟三　計畫推動現況</div><div style={S.cb}>
-              <div style={{...S.lbl,fontSize:13,marginBottom:10}}>① 上傳處方資料 Excel</div>
+              {/* 處方統計 */}
+              <div style={{fontWeight:700,fontSize:13,marginBottom:8}}>① 現行健康處方開立及執行情形</div>
               <UploadZone onFile={handleExcel} fileRef={excelRef} label="上傳處方紀錄 Excel" sub="上傳後自動計算各類處方統計" accept=".xlsx,.xls"/>
               {excelName&&<div style={{fontSize:12,color:C.muted,marginTop:6}}>✓ 已載入：{excelName}</div>}
-              {excelRows&&<div style={{marginTop:16}}>
-                <div style={{...S.row,gap:20,marginBottom:14,flexWrap:"wrap"}}>
-                  <div><div style={S.lbl}>本週截止日</div><input type="date" style={{...S.inp,maxWidth:180}} value={cutoffThis} onChange={e=>setCutoffThis(e.target.value)}/><div style={{fontSize:11,color:C.muted,marginTop:3}}>計算截至此日的累計數</div></div>
-                  <div><div style={S.lbl}>上週截止日</div><input type="date" style={{...S.inp,maxWidth:180}} value={cutoffLast} onChange={e=>setCutoffLast(e.target.value)}/><div style={{fontSize:11,color:C.muted,marginTop:3}}>計算截至此日的累計數</div></div>
+              {excelRows&&<div style={{marginTop:14}}>
+                <div style={{...S.row,gap:20,marginBottom:12,flexWrap:"wrap"}}>
+                  <div><div style={S.lbl}>本週截止日</div><input type="date" style={{...S.inp,maxWidth:180}} value={cutoffThis} onChange={e=>setCutoffThis(e.target.value)}/></div>
+                  <div><div style={S.lbl}>上週截止日</div><input type="date" style={{...S.inp,maxWidth:180}} value={cutoffLast} onChange={e=>setCutoffLast(e.target.value)}/></div>
                 </div>
-                {prescStats&&<><div style={{...S.lbl,fontSize:12,marginBottom:8}}>處方統計預覽</div>
-                  <div style={{overflowX:"auto"}}>
-                    <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
-                      <thead>
-                        <tr><th rowSpan={2} style={{background:C.ink,color:"#e8dfc8",padding:"5px 8px",border:"1px solid #555",width:"20%"}}>處方類別</th><th colSpan={3} style={{background:C.ink,color:"#e8dfc8",padding:"5px 8px",border:"1px solid #555"}}>處方數</th><th colSpan={3} style={{background:C.ink,color:"#e8dfc8",padding:"5px 8px",border:"1px solid #555"}}>已執行</th><th colSpan={3} style={{background:C.ink,color:"#e8dfc8",padding:"5px 8px",border:"1px solid #555"}}>執行率</th></tr>
-                        <tr>{["本週","上週","差異","本週","上週","差異","本週","上週","差異"].map((h,i)=><th key={i} style={{background:C.ink,color:"#e8dfc8",padding:"4px 6px",border:"1px solid #555",fontSize:10,textAlign:"center"}}>{h}</th>)}</tr>
-                      </thead>
-                      <tbody>
-                        {[...prescStats.rows,{label:"處方開立總數(各處方加總)",isTotal:true,...prescStats.total}].map((r,i)=>{
-                          const dO=r.open-(r.prevOpen||0),dE=r.exec-(r.prevExec||0),dR=parseFloat(r.rate)-(parseFloat(r.prevRate||"0"));
-                          const fmt=(d,isR)=>d===0?"0":d>0?`+${isR?d.toFixed(1)+"%":d}`:`${isR?d.toFixed(1)+"%":d}`;
-                          const dc=(v)=>typeof v==="string"&&v.startsWith("+")?"#2e7d32":v==="0"||v==="0%"?"#555":"#c62828";
-                          return <tr key={i} style={{background:r.isTotal?"#f5f0e8":"white",fontWeight:r.isTotal?700:400}}>
-                            <td style={{padding:"3px 8px",border:`1px solid ${C.border}`,fontSize:11}}>{r.label}</td>
-                            {[r.open,r.prevOpen||0,fmt(dO,false),r.exec,r.prevExec||0,fmt(dE,false),r.rate,r.prevRate||"0%",fmt(dR,true)].map((v,j)=>(
-                              <td key={j} style={{padding:"3px 6px",textAlign:"center",border:`1px solid ${C.border}`,fontSize:11,color:[2,5,8].includes(j)?dc(String(v)):"inherit"}}>{v}</td>
-                            ))}
-                          </tr>;
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-                </>}
-            </div>}</div></div>
-            <div style={S.card}><div style={S.ch("#2e5d2e")}>② 診所拓點現況</div><div style={S.cb}><div style={{overflowX:"auto"}}>
+                {prescStats&&<div style={{overflowX:"auto"}}><table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+                  <thead>
+                    <tr><th rowSpan={2} style={{background:C.ink,color:"#e8dfc8",padding:"5px 8px",border:"1px solid #555",width:"20%"}}>處方類別</th><th colSpan={3} style={{background:C.ink,color:"#e8dfc8",padding:"5px 8px",border:"1px solid #555",textAlign:"center"}}>處方數</th><th colSpan={3} style={{background:C.ink,color:"#e8dfc8",padding:"5px 8px",border:"1px solid #555",textAlign:"center"}}>已執行</th><th colSpan={3} style={{background:C.ink,color:"#e8dfc8",padding:"5px 8px",border:"1px solid #555",textAlign:"center"}}>執行率</th></tr>
+                    <tr>{["本週","上週","差異","本週","上週","差異","本週","上週","差異"].map((h,i)=><th key={i} style={{background:C.ink,color:"#e8dfc8",padding:"4px 6px",border:"1px solid #555",fontSize:10,textAlign:"center"}}>{h}</th>)}</tr>
+                  </thead>
+                  <tbody>
+                    {[...prescStats.rows,{label:"處方開立總數(各處方加總)",isTotal:true,...prescStats.total}].map((r,i)=>{
+                      const dO=r.open-(r.prevOpen||0),dE=r.exec-(r.prevExec||0),dR=parseFloat(r.rate)-(parseFloat(r.prevRate||"0"));
+                      const fmt=(d,isR)=>d===0?"0":d>0?`+${isR?d.toFixed(1)+"%":d}`:`${isR?d.toFixed(1)+"%":d}`;
+                      const dc=(v)=>typeof v==="string"&&v.startsWith("+")?"#2e7d32":v==="0"||v==="0%"?"#555":"#c62828";
+                      return <tr key={i} style={{background:r.isTotal?"#f5f0e8":"white",fontWeight:r.isTotal?700:400}}>
+                        <td style={{padding:"3px 8px",border:`1px solid ${C.border}`,fontSize:11}}>{r.label}</td>
+                        {[r.open,r.prevOpen||0,fmt(dO,false),r.exec,r.prevExec||0,fmt(dE,false),r.rate,r.prevRate||"0%",fmt(dR,true)].map((v,j)=>(
+                          <td key={j} style={{padding:"3px 6px",textAlign:"center",border:`1px solid ${C.border}`,fontSize:11,color:[2,5,8].includes(j)?dc(String(v)):"inherit"}}>{v}</td>
+                        ))}
+                      </tr>;
+                    })}
+                  </tbody>
+                </table></div>}
+              </div>}
+            </div></div>
+
+            {/* 診所拓點 */}
+            <div style={S.card}><div style={S.ch("#2e5d2e")}>② 診所拓點現況（數字從 Excel 自動更新）</div><div style={S.cb}><div style={{overflowX:"auto"}}>
               <table style={{width:"100%",borderCollapse:"collapse",fontSize:12,minWidth:700}}>
                 <thead>
                   <tr><th rowSpan={2} style={{background:C.ink,color:"#e8dfc8",padding:"5px 8px",border:"1px solid #555",width:"6%"}}>分類</th><th rowSpan={2} style={{background:C.ink,color:"#e8dfc8",padding:"5px 8px",border:"1px solid #555"}}>診所名稱</th><th rowSpan={2} style={{background:C.ink,color:"#e8dfc8",padding:"5px 8px",border:"1px solid #555",fontSize:10}}>預計教學時間</th><th colSpan={4} style={{background:C.ink,color:"#e8dfc8",padding:"5px 8px",border:"1px solid #555",fontSize:10,textAlign:"center"}}>設置情形</th><th colSpan={2} style={{background:C.ink,color:"#e8dfc8",padding:"5px 8px",border:"1px solid #555",textAlign:"center"}}>處方數量</th><th rowSpan={2} style={{background:C.ink,color:"#e8dfc8",padding:"5px 8px",border:"1px solid #555"}}>備註</th></tr>
@@ -499,10 +934,42 @@ function App() {
                 </tbody>
               </table>
             </div></div></div>
+
+            {/* 課程開設現況 */}
+            <div style={S.card}><div style={S.ch("#2e5d2e")}>③ 目前課程開設現況</div><div style={S.cb}>
+              <CourseScheduleSection onDataChange={data=>updateSection("courses",data)}/>
+            </div></div>
+
+            {/* 五至九 */}
+            <div style={S.card}><div style={S.ch("#2e5d2e")}>④ 處方活動日課程表（可延續上次資料）</div><div style={S.cb}>
+              <PersistSection title="處方活動日課程表" sectionKey="prescriptionDayCourses" columns={PRESCRIPTION_DAY_COLS} defaultRow={PRESCRIPTION_DAY_DEFAULT} onDataChange={data=>updateSection("prescriptionDayCourses",data)}/>
+            </div></div>
+
+            <div style={S.card}><div style={S.ch("#2e5d2e")}>⑤ 曾參與說明會但未開課教師名單（可延續上次資料）</div><div style={S.cb}>
+              <PersistSection title="未開課師資" sectionKey="uninstructed" columns={UNINSTRUCTED_COLS} defaultRow={UNINSTRUCTED_DEFAULT} onDataChange={data=>updateSection("uninstructed",data)}/>
+            </div></div>
+
+            <div style={S.card}><div style={S.ch("#2e5d2e")}>⑥ 潛在場地列表（可延續上次資料）</div><div style={S.cb}>
+              <PersistSection title="潛在場地" sectionKey="venues" columns={VENUE_COLS} defaultRow={VENUE_DEFAULT} onDataChange={data=>updateSection("venues",data)}/>
+            </div></div>
+
+            <div style={S.card}><div style={S.ch("#2e5d2e")}>⑦⑧ 潛在課程及師資／未成功開課課程（可延續上次資料）</div><div style={S.cb}>
+              <PersistSection title="潛在課程" sectionKey="potentialCourses" columns={POTENTIAL_COURSE_COLS} defaultRow={POTENTIAL_COURSE_DEFAULT} onDataChange={data=>updateSection("potentialCourses",data)}/>
+            </div></div>
+
+            {/* 時程表 */}
+            <div style={S.card}><div style={S.ch("#2e5d2e")}>⑨ 重要會議及活動時程（可延續上次資料）</div><div style={S.cb}>
+              <PersistSection title="重要時程" sectionKey="schedules" columns={SCHEDULE_COLS} defaultRow={SCHEDULE_DEFAULT} onDataChange={data=>updateSection("schedules",data)}/>
+            </div></div>
+
+            <div style={S.card}><div style={S.ch("#2e5d2e")}>⑩ 拜會處方執行相關單位時程（可延續上次資料）</div><div style={S.cb}>
+              <PersistSection title="拜會時程" sectionKey="visits" columns={VISIT_COLS} defaultRow={VISIT_DEFAULT} onDataChange={data=>updateSection("visits",data)}/>
+            </div></div>
+
             <div style={{display:"flex",gap:10}}><button style={S.btnO} onClick={()=>setStep(1)}>← 上一步</button><button style={S.btn} onClick={()=>setStep(3)}>下一步 →</button></div>
           </>}
 
-          {/* S3 */}
+                    {/* S3 */}
           {step===3&&<>
             {managed.length>0&&<div style={S.card}><div style={S.ch()}>📌 繼續列管事項</div><div style={S.cb}>{managed.map((item,i)=><TrackedCard key={item.id||i} item={item} index={i} onChange={updateManaged}/>)}</div></div>}
             {suggested.length>0&&<div style={S.card}><div style={S.ch("#2e5d9a")}>🔔 建議列管事項（AI 判斷）</div><div style={S.cb}>{suggested.map((item,i)=><TrackedCard key={item.id||i} item={item} index={i} onChange={updateSuggested}/>)}</div></div>}

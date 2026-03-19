@@ -147,27 +147,57 @@ function Btn({children,onClick,variant="primary",disabled,style:ex}) {
 }
 
 
+
 function ImeInput({value, onChange, placeholder, type="text", style: sx}) {
-  const ref = React.useRef(null);
-  const composing = React.useRef(false);
-  // Only set value from outside when not focused
+  const id = React.useRef("ime_" + Math.random().toString(36).slice(2));
   React.useEffect(() => {
-    if (ref.current && ref.current !== document.activeElement) {
-      ref.current.value = value || "";
-    }
-  }, [value]);
-  return <input
-    ref={ref}
-    type={type}
-    defaultValue={value||""}
-    placeholder={placeholder}
-    style={sx}
-    onCompositionStart={() => { composing.current = true; }}
-    onCompositionEnd={e => { composing.current = false; onChange(e.target.value); }}
-    onInput={e => { if (!composing.current) onChange(e.target.value); }}
-  />;
+    const el = document.getElementById(id.current);
+    if (el && el !== document.activeElement) el.value = value || "";
+  });
+  React.useEffect(() => {
+    const el = document.getElementById(id.current);
+    if (!el) return;
+    let composing = false;
+    const onCS = () => composing = true;
+    const onCE = e => { composing = false; onChange(e.target.value); };
+    const onInput = e => { if (!composing) onChange(e.target.value); };
+    el.addEventListener("compositionstart", onCS);
+    el.addEventListener("compositionend", onCE);
+    el.addEventListener("input", onInput);
+    return () => {
+      el.removeEventListener("compositionstart", onCS);
+      el.removeEventListener("compositionend", onCE);
+      el.removeEventListener("input", onInput);
+    };
+  }, []);
+  const styleStr = sx ? Object.entries(sx).map(([k,v])=>`${k.replace(/([A-Z])/g,'-$1').toLowerCase()}:${v}`).join(';') : '';
+  return <input id={id.current} type={type} defaultValue={value||""} placeholder={placeholder||""} style={sx} />;
 }
 function ImeTarea({value, onChange, placeholder, rows=5, style: sx}) {
+  const id = React.useRef("ime_" + Math.random().toString(36).slice(2));
+  React.useEffect(() => {
+    const el = document.getElementById(id.current);
+    if (el && el !== document.activeElement) el.value = value || "";
+  });
+  React.useEffect(() => {
+    const el = document.getElementById(id.current);
+    if (!el) return;
+    let composing = false;
+    const onCS = () => composing = true;
+    const onCE = e => { composing = false; onChange(e.target.value); };
+    const onInput = e => { if (!composing) onChange(e.target.value); };
+    el.addEventListener("compositionstart", onCS);
+    el.addEventListener("compositionend", onCE);
+    el.addEventListener("input", onInput);
+    return () => {
+      el.removeEventListener("compositionstart", onCS);
+      el.removeEventListener("compositionend", onCE);
+      el.removeEventListener("input", onInput);
+    };
+  }, []);
+  return <textarea id={id.current} defaultValue={value||""} placeholder={placeholder||""} rows={rows} style={sx} />;
+}
+) {
   const ref = React.useRef(null);
   const composing = React.useRef(false);
   React.useEffect(() => {
@@ -458,6 +488,117 @@ function AdminView({proposals, onStatusChange, onDelete, onRefresh}) {
   );
 }
 
+
+// ── Work report ───────────────────────────────────────────────
+async function loadWorkReports() {
+  const v = await fbLoad("work_reports/all"); return v ? Object.values(v) : [];
+}
+async function saveWorkReport(report) {
+  const existing = await loadWorkReports();
+  const idx = existing.findIndex(r => r.name === report.name);
+  if (idx >= 0) existing[idx] = report; else existing.push(report);
+  const obj = {};
+  existing.forEach(r => { obj[r.name] = r; });
+  await fbSave("work_reports/all", obj);
+}
+
+function WorkReportView({ myName, onMyNameChange, members }) {
+  const [name, setName] = useState(myName || "");
+  const [recent, setRecent] = useState("");
+  const [plan, setPlan] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [success, setSuccess] = useState(false);
+  const [err, setErr] = useState("");
+
+  useEffect(() => {
+    if (myName) {
+      setName(myName);
+      loadWorkReports().then(reports => {
+        const mine = reports.find(r => r.name === myName);
+        if (mine) { setRecent(mine.recent || ""); setPlan(mine.plan || ""); }
+      });
+    }
+  }, [myName]);
+
+  const handleSubmit = async () => {
+    if (!name.trim()) { setErr("請填寫姓名"); return; }
+    setLoading(true); setErr("");
+    try {
+      await saveWorkReport({ name: name.trim(), recent: recent.trim(), plan: plan.trim(), updatedAt: new Date().toISOString() });
+      onMyNameChange(name.trim()); setSuccess(true);
+    } catch(e) { setErr("儲存失敗：" + e.message); }
+    setLoading(false);
+  };
+
+  return (
+    <div>
+      {success && <div style={{background:"#e8f5e9",border:"1px solid #66bb6a",borderRadius:3,padding:"10px 14px",marginBottom:14,fontSize:13,color:"#2e7d32"}}>✓ 工作回報已儲存！</div>}
+      <div style={{fontSize:13,color:C.muted,marginBottom:16,lineHeight:1.7}}>
+        填寫本週工作執行情形及下週工作規劃，管理員會統整為議程的工作進度表。
+      </div>
+      {members.length > 0 && (
+        <div style={{marginBottom:14,padding:"10px 14px",background:C.cream,border:`1px solid ${C.border}`,borderRadius:3}}>
+          <div style={{fontSize:11,color:C.muted,fontWeight:700,marginBottom:6}}>你是誰？</div>
+          <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+            {members.map(m=>(
+              <button key={m} onClick={()=>{ setName(m); onMyNameChange(m);
+                loadWorkReports().then(reports=>{const mine=reports.find(r=>r.name===m);if(mine){setRecent(mine.recent||"");setPlan(mine.plan||"");}});
+              }} style={{padding:"4px 12px",fontSize:12,cursor:"pointer",borderRadius:20,border:`1px solid ${C.border}`,
+                background:name===m?C.ink:C.cream,color:name===m?"#ede8d8":C.ink}}>{m}</button>
+            ))}
+          </div>
+        </div>
+      )}
+      <Inp label="姓名 *" value={name} onChange={v=>setName(v)} placeholder="請輸入你的姓名"/>
+      <Txtarea label="近期工作執行情形（本週）" value={recent} onChange={v=>setRecent(v)}
+        placeholder="請條列本週完成的工作事項，例如：&#10;一、完成第十七次會議紀錄&#10;二、拜會中山健康服務中心" rows={6}/>
+      <Txtarea label="未來工作重點規劃（下週）" value={plan} onChange={v=>setPlan(v)}
+        placeholder="請條列下週預計執行的工作，例如：&#10;一、書寫第十八次會議議程&#10;二、追蹤診所處方開立情形" rows={6}/>
+      {err && <div style={{color:C.red,fontSize:13,marginBottom:8}}>⚠ {err}</div>}
+      <Btn onClick={handleSubmit} disabled={loading}>{loading?"儲存中…":"送出工作回報"}</Btn>
+    </div>
+  );
+}
+
+function WorkAdminView() {
+  const [reports, setReports] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    loadWorkReports().then(r => { setReports(r.sort((a,b)=>a.name.localeCompare(b.name,"zh"))); setLoading(false); });
+  }, []);
+
+  if (loading) return <div style={{color:C.muted,fontSize:13}}>載入中…</div>;
+  if (!reports.length) return <div style={{color:C.muted,fontSize:13,padding:"16px 0"}}>尚未有任何工作回報。</div>;
+
+  return (
+    <div>
+      <div style={{fontSize:12,color:C.muted,marginBottom:12}}>共 {reports.length} 人回報　資料會自動帶入議程系統的工作進度表</div>
+      <div style={{overflowX:"auto"}}>
+        <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+          <thead>
+            <tr>
+              {["報告人","近期工作執行情形","未來工作重點規劃","更新時間"].map(h=>(
+                <th key={h} style={{background:"#1a1610",color:"#ede8d8",padding:"7px 10px",border:"1px solid #555",textAlign:"left",whiteSpace:"nowrap"}}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {reports.map((r,i)=>(
+              <tr key={i} style={{background:i%2?"#fdf9f0":"white"}}>
+                <td style={{padding:"6px 10px",border:"1px solid #ddd",fontWeight:700,whiteSpace:"nowrap"}}>{r.name}</td>
+                <td style={{padding:"6px 10px",border:"1px solid #ddd",whiteSpace:"pre-wrap",lineHeight:1.7,fontSize:11}}>{r.recent||"—"}</td>
+                <td style={{padding:"6px 10px",border:"1px solid #ddd",whiteSpace:"pre-wrap",lineHeight:1.7,fontSize:11}}>{r.plan||"—"}</td>
+                <td style={{padding:"6px 10px",border:"1px solid #ddd",fontSize:11,color:C.muted,whiteSpace:"nowrap"}}>{r.updatedAt?new Date(r.updatedAt).toLocaleString("zh-TW"):""}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 function AdminLogin({onLogin}) {
   const [pin, setPin] = useState(""); const [err, setErr] = useState(false);
   const submit = () => { if(pin===ADMIN_PIN){onLogin();}else{setErr(true);setPin("");} };
@@ -504,7 +645,7 @@ function App() {
     await saveProposals(updated); setProposals(updated);
   };
 
-  const TABS = [["submit","📝 送出提案"],["mine","📋 我的紀錄"],["admin","⚙️ 管理端"]];
+  const TABS = [["submit","📝 送出提案"],["work","📊 工作回報"],["mine","📋 我的紀錄"],["admin","⚙️ 管理端"]];
 
   return (
     <div style={{fontFamily:"'Noto Serif TC',STSong,serif",background:"#f7f4ee",minHeight:"100vh",color:"#1a1610"}}>
