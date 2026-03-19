@@ -34,17 +34,19 @@
 <body>
 <!-- v20260319115838 -->
 <div id="root"></div>
-<script type="text/babel" data-presets="react">
-const { useState, useEffect, useRef, useCallback } = React;
-const API = "https://claude-proxy.s71043201.workers.dev";
+<script>
+// docx-js browser - destructure lazily after CDN load
+let Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell,
+    AlignmentType, BorderStyle, WidthType, ShadingType, VerticalAlign,
+    PageBreak, UnderlineType;
 
-// ══ DOCX GENERATOR ══════════════════════════════════════════
-// docx-js browser destructuring
-const {
-  Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell,
-  AlignmentType, BorderStyle, WidthType, ShadingType, VerticalAlign,
-  PageBreak, UnderlineType
-} = docx;
+function initDocx() {
+  if (!window.docx) { console.error("docx CDN not loaded"); return false; }
+  ({ Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell,
+     AlignmentType, BorderStyle, WidthType, ShadingType, VerticalAlign,
+     PageBreak, UnderlineType } = window.docx);
+  return true;
+}
 
 // ── page layout (A4, DXA: 1440 = 1 inch, 567 = 1 cm) ──────────
 const PAGE_W   = 11906;                   // A4 width
@@ -513,6 +515,7 @@ function buildDocx(data) {
 }
 
 async function generateAndDownloadDocx(data, filename) {
+  if (!initDocx()) throw new Error("docx 程式庫未載入，請重新整理頁面");
   const doc = buildDocx(data);
   const blob = await Packer.toBlob(doc);
   const url = URL.createObjectURL(blob);
@@ -524,6 +527,12 @@ async function generateAndDownloadDocx(data, filename) {
 }
 
 // ════════════════════════════════════════════════════════════
+</script>
+<script type="text/babel" data-presets="react">
+const { useState, useEffect, useRef, useCallback } = React;
+const API = "https://claude-proxy.s71043201.workers.dev";
+
+// ══ DOCX GENERATOR ══════════════════════════════════════════
 
 
 // Firebase
