@@ -1421,406 +1421,323 @@ ${urg.length===0?"<p class='i1'>（無）</p>":propBlock(urg,true)}
 </body></html>`;
 }
 
-const STEPS=["上傳紀錄","議程資訊","計畫現況","列管事項","提案整合","預覽下載"];
 
+const STEPS=["上傳紀錄","列管事項確認"];
 
-function App() {
-  const [step,setStep]=useState(0);
-  const [view,setView]=useState("main");
-  const [loading,setLoading]=useState("");
-  const [err,setErr]=useState("");
-  const [minutesName,setMinutesName]=useState("");
-  const [excelName,setExcelName]=useState("");
-  const [generated,setGenerated]=useState(false);
-  const [archives,setArchives]=useState([]);
-  const [archiveLoading,setArchiveLoading]=useState(false);
-  const [info,setInfo]=useState({org:"台北市醫師公會「健康台灣深耕計畫」",subtitle:"臺北市慢性病防治全人健康智慧整合照護計畫",meetingNo:"第十八次",theme:"統整近期工作進度與後續執行方向",date:"",weekday:"",time:"14：00",location:"",chair:"健康台灣深耕計畫 蔡蕙芳執行長",dataDate:""});
-  const [prescStats,setPrescStats]=useState(null);
-  const [excelRows,setExcelRows]=useState(null);
-  const [cutoffThis,setCutoffThis]=useState("");
-  const [cutoffLast,setCutoffLast]=useState("");
-  const [clinics,setClinics]=useState(DEFAULT_CLINICS);
-  const [sectionData,setSectionData]=useState({});
-  const [workReports,setWorkReports]=useState([]);
+// ── 會次選單 ──────────────────────────────────────────────────────
+const MEETING_NUMS = ["第一次","第二次","第三次","第四次","第五次","第六次","第七次","第八次","第九次","第十次","第十一次","第十二次","第十三次","第十四次","第十五次","第十六次","第十七次","第十八次","第十九次","第二十次"];
+const SECTION_TYPES = ["報告事項","討論事項","臨時動議"];
+const ITEM_NUMS = ["一","二","三","四","五","六","七","八","九","十","十一","十二","十三","十四","十五"];
 
-  useEffect(()=>{
-    loadWorkReports().then(r=>{ setSectionData(prev=>({...prev,workReports:r})); setWorkReports(r); });
-  },[]);
-  const updateSection=(key,data)=>setSectionData(prev=>({...prev,[key]:data}));
-  const [managed,setManaged]=useState([]);
-  const [suggested,setSuggested]=useState([]);
-  const [proposals,setProposals]=useState([]);
-  const minutesRef=useRef(), excelRef=useRef(), proposalRef=useRef();
-
-  const updateManaged=(i,v)=>setManaged(a=>{const n=[...a];n[i]=v;return n;});
-  const updateSuggested=(i,v)=>setSuggested(a=>{const n=[...a];n[i]=v;return n;});
-  const updateProposal=(i,v)=>setProposals(a=>{const n=[...a];n[i]=v;return n;});
-  const removeProposal=(i)=>setProposals(a=>a.filter((_,j)=>j!==i));
-  const updateClinic=(id,field,value)=>setClinics(a=>a.map(c=>c.id===id?{...c,[field]:value}:c));
-
-  const recalcStats=useCallback((rows,cThis,cLast)=>{
-    const stats=computeStats(rows,cThis||null,cLast||null);
-    const clinicMap={};
-    const cutoffDate=cThis?new Date(cThis):null;
-    for(let i=1;i<rows.length;i++){const r=rows[i];const cn=r[7];const ex=r[14];const od=parseDate(r[21]);if(!cn)continue;if(cutoffDate&&od&&od>cutoffDate)continue;if(!clinicMap[cn])clinicMap[cn]={open:0,exec:0};clinicMap[cn].open++;if(ex==="V"||ex==="v"||ex===true)clinicMap[cn].exec++;}
-    setClinics(prev=>prev.map(c=>{const key=Object.keys(clinicMap).find(k=>k.includes(c.name.slice(0,4))||c.name.includes(k.slice(0,4)));if(key)return{...c,openCount:clinicMap[key].open,execCount:clinicMap[key].exec};return c;}));
-    setPrescStats(stats);
-  },[]);
-
-  useEffect(()=>{ if(excelRows) recalcStats(excelRows,cutoffThis,cutoffLast); },[cutoffThis,cutoffLast]);
-
-  const handleMinutes=async(file)=>{
-    if(!file)return;setErr("");setLoading("解析會議紀錄（可能需要30-60秒）…");
-    try{
-      const data=await extractMinutes(file);
-      const managed=(data?.managedItems||[]).filter(i=>i.isManaged).map(i=>({...i,include:true,mode:"decision",customText:""}));
-      const suggested=(data?.newItems||[]).filter(i=>i.needsManagement).map(i=>({...i,include:false,mode:"decision",customText:""}));
-      setManaged(managed);setSuggested(suggested);setMinutesName(file.name);
-      setStep(1);
-    }
-    catch(e){setErr("解析失敗："+e.message);}setLoading("");
+function SourceSelector({ value, onChange }) {
+  // Parse value: "第十六次 臨時動議三" → {meet:"第十六次", type:"臨時動議", num:"三"}
+  const parse = (v) => {
+    const m = (v||"").match(/^(第.次)\s*(報告事項|討論事項|臨時動議)(.*)/);
+    if (m) return { meet: m[1], type: m[2], num: m[3].trim() };
+    return { meet: "", type: "臨時動議", num: "" };
   };
-  const handleExcel=async(file)=>{
-    if(!file)return;setErr("");setLoading("讀取 Excel 資料…");
-    try{const rows=await parseExcel(file);setExcelRows(rows);setExcelName(file.name);let maxDate=null;for(let i=1;i<rows.length;i++){const d=parseDate(rows[i][21]);if(d&&(!maxDate||d>maxDate))maxDate=d;}let isoThis="",isoLast="";if(maxDate){isoThis=`${maxDate.getFullYear()}-${String(maxDate.getMonth()+1).padStart(2,"0")}-${String(maxDate.getDate()).padStart(2,"0")}`;const prev=new Date(maxDate);prev.setDate(prev.getDate()-7);isoLast=`${prev.getFullYear()}-${String(prev.getMonth()+1).padStart(2,"0")}-${String(prev.getDate()).padStart(2,"0")}`;setCutoffThis(isoThis);setCutoffLast(isoLast);}recalcStats(rows,isoThis||null,isoLast||null);}
-    catch(e){setErr("Excel 解析失敗："+e.message);}setLoading("");
-  };
-  const handleProposal=async(file)=>{
-    if(!file)return;setErr("");setLoading(`解析提案單「${file.name}」…`);
-    try{const items=await extractProposal(file);const annotated=items.map(i=>({...i,section:i.suggestedSection||"討論事項",include:true,id:i.id||`p${Date.now()}${Math.random().toString(36).slice(2)}`}));setProposals(prev=>[...prev,...annotated]);}
-    catch(e){setErr("提案單解析失敗："+e.message);}setLoading("");
-  };
+  const compose = (meet, type, num) => `${meet} ${type}${num}`;
+  const { meet, type, num } = parse(value);
 
-  const handleGenerate=async()=>{
-    const tracked=[...managed.filter(i=>i.include),...suggested.filter(i=>i.include)];
-    try {
-      await generateAndDownloadDocx(
-        { info, prescStats, clinics, tracked, proposals, sectionData },
-        `${info.meetingNo}內部工作會議議程.docx`
-      );
-      const record={id:`agenda_${Date.now()}`,title:`${info.meetingNo}內部工作會議`,date:info.date,createdAt:new Date().toISOString(),info,tracked,proposals:proposals.filter(p=>p.include),hasPrescStats:!!prescStats};
-      await saveArchive(record);
-    } catch(e) { setErr("下載失敗："+e.message); console.error(e); }
-    setGenerated(true);
-  };
-
-  const Dot=({n})=><div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:3}}>
-    <div style={{width:26,height:26,borderRadius:"50%",background:step>=n?C.ink:C.border,color:step>=n?"#e8dfc8":"#9a8660",display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:700}}>{n+1}</div>
-    <span style={{fontSize:10,color:step>=n?C.ink:"#9a8660",whiteSpace:"nowrap"}}>{STEPS[n]}</span>
-  </div>;
+  const sel = { border:`1px solid ${C.border}`, padding:"4px 6px", fontSize:11, background:C.cream, fontFamily:"inherit", borderRadius:1 };
 
   return (
-    <div style={{fontFamily:"'Noto Serif TC',STSong,serif",background:C.bg,minHeight:"100vh",color:C.ink}}>
-      <div style={{background:C.ink,color:"#e8dfc8",padding:"22px 36px 16px",borderBottom:`3px solid ${C.gold}`}}>
-        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between"}}>
-          <div><div style={{fontSize:19,fontWeight:700,letterSpacing:".12em"}}>會議議程製作系統</div><div style={{fontSize:11,marginTop:3,opacity:.65}}>健康台灣深耕計畫　內部工作會議</div></div>
-          <button style={{...S.btnO,fontSize:12,padding:"6px 14px",color:"#e8dfc8",borderColor:"rgba(255,255,255,0.3)"}}
-            onClick={async()=>{if(view==="archive"){setView("main");return;}setArchiveLoading(true);try{const idx=await loadArchiveIndex();setArchives(Array.isArray(idx)?idx:[]);}catch{setArchives([]);}setArchiveLoading(false);setView("archive");}}>
+    <div style={{ display:"flex", gap:4, flexWrap:"wrap", alignItems:"center" }}>
+      <select style={sel} value={meet} onChange={e=>onChange(compose(e.target.value, type, num))}>
+        <option value="">—選擇次數—</option>
+        {MEETING_NUMS.map(n=><option key={n} value={n}>{n}</option>)}
+      </select>
+      <select style={sel} value={type} onChange={e=>onChange(compose(meet, e.target.value, num))}>
+        {SECTION_TYPES.map(t=><option key={t} value={t}>{t}</option>)}
+      </select>
+      <select style={sel} value={num} onChange={e=>onChange(compose(meet, type, e.target.value))}>
+        <option value="">—選擇項目—</option>
+        {ITEM_NUMS.map(n=><option key={n} value={n}>第{n}案</option>)}
+      </select>
+    </div>
+  );
+}
+
+function TrackedItemRow({ item, index, isManaged, onUpdate, onRemove }) {
+  const [polishing, setPolishing] = useState(false);
+
+  const handlePolish = async () => {
+    if (!item.customText?.trim()) return;
+    setPolishing(true);
+    try {
+      const res = await fetch(API, {
+        method:"POST", headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({
+          model:"claude-sonnet-4-20250514", max_tokens:1000,
+          system:"你是擅長撰寫公文的秘書。請將口語敘述整理成正式公文格式，語氣簡潔條理清晰，繁體中文。直接輸出整理後文字，不要加任何說明。",
+          messages:[{role:"user",content:item.customText}]
+        })
+      });
+      const d = await res.json();
+      const polished = d.content?.[0]?.text || item.customText;
+      onUpdate({ customText: polished });
+    } catch(e) { alert("整理失敗："+e.message); }
+    setPolishing(false);
+  };
+
+  const inp = { width:"100%", border:`1px solid ${C.border}`, padding:"5px 7px", fontSize:12, background:C.cream, fontFamily:"inherit", borderRadius:1 };
+
+  return (
+    <div style={{ ...S.ibox, marginBottom:10, position:"relative", borderLeft:`3px solid ${item.include!==false?C.blue:C.border}` }}>
+      <button onClick={onRemove} style={{ position:"absolute", top:8, right:10, background:"none", border:"none", cursor:"pointer", color:"#ccc", fontSize:16 }}>✕</button>
+
+      {/* Row 1: 來源 + 案由 */}
+      <div style={{ display:"flex", gap:10, marginBottom:8, flexWrap:"wrap", paddingRight:28 }}>
+        <div style={{ flex:"0 0 auto" }}>
+          <div style={S.lbl}>來源</div>
+          <SourceSelector value={item.source||""} onChange={v=>onUpdate({source:v})}/>
+        </div>
+        <div style={{ flex:1, minWidth:160 }}>
+          <div style={S.lbl}>案由</div>
+          <input style={inp} value={item.caseTitle||""} onChange={e=>onUpdate({caseTitle:e.target.value})} placeholder="例：合約書研擬"/>
+        </div>
+      </div>
+
+      {/* Row 2: 決議事項 */}
+      <div style={{ marginBottom:8 }}>
+        <div style={S.lbl}>決議事項摘要</div>
+        <textarea style={{ ...inp, resize:"vertical", minHeight:52 }} value={item.content||""} onChange={e=>onUpdate({content:e.target.value})} placeholder="原決議事項內容"/>
+      </div>
+
+      {/* Row 3: 繼續/解除 */}
+      <div style={{ display:"flex", gap:20, alignItems:"center", marginBottom: item.include!==false ? 8 : 0 }}>
+        <span style={{ fontSize:12, color:C.muted }}>本次決定：</span>
+        {[["繼續列管",true],["解除列管",false]].map(([label,val])=>(
+          <label key={label} style={{ display:"flex", alignItems:"center", gap:4, cursor:"pointer", fontSize:13,
+            color: (item.include!==false)===val ? (val?C.blue:"#888") : C.muted,
+            fontWeight: (item.include!==false)===val ? 700 : 400 }}>
+            <input type="radio" name={`inc-${item.source}-${index}`} checked={(item.include!==false)===val} onChange={()=>onUpdate({include:val})}/>
+            {label}
+          </label>
+        ))}
+      </div>
+
+      {/* Row 4: 辦理情形（繼續列管才顯示）*/}
+      {item.include!==false && (
+        <div>
+          <div style={{ display:"flex", gap:16, marginBottom:6 }}>
+            {[["decision","依決議辦理"],["custom","另外說明"]].map(([m,l])=>(
+              <label key={m} style={{ display:"flex", alignItems:"center", gap:4, cursor:"pointer", fontSize:12 }}>
+                <input type="radio" name={`mode-${item.source}-${index}`} checked={item.mode===m} onChange={()=>onUpdate({mode:m})}/>{l}
+              </label>
+            ))}
+          </div>
+          {item.mode==="custom" && (
+            <div>
+              <textarea style={{ ...inp, resize:"vertical", minHeight:56, marginBottom:6 }}
+                value={item.customText||""} onChange={e=>onUpdate({customText:e.target.value})}
+                placeholder="口語輸入即可，可按下方按鈕整理成公文格式"/>
+              <button style={{ ...S.btnS(C.gold), fontSize:11 }} onClick={handlePolish} disabled={polishing}>
+                {polishing?"整理中…":"✦ AI 整理成公文格式"}
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function App() {
+  const [step, setStep] = useState(0);
+  const [view, setView] = useState("main");
+  const [loading, setLoading] = useState("");
+  const [err, setErr] = useState("");
+  const [minutesName, setMinutesName] = useState("");
+  const [generated, setGenerated] = useState(false);
+  const [archives, setArchives] = useState([]);
+  const [archiveLoading, setArchiveLoading] = useState(false);
+  const [managed, setManaged] = useState([]);
+  const [suggested, setSuggested] = useState([]);
+  const minutesRef = useRef();
+
+  const allItems = [...managed, ...suggested];
+
+  const updateItem = (i, val) => {
+    if (i < managed.length) {
+      setManaged(p => { const n=[...p]; n[i]={...n[i],...val}; return n; });
+    } else {
+      const j = i - managed.length;
+      setSuggested(p => { const n=[...p]; n[j]={...n[j],...val}; return n; });
+    }
+  };
+  const removeItem = (i) => {
+    if (i < managed.length) setManaged(p=>p.filter((_,j)=>j!==i));
+    else setSuggested(p=>p.filter((_,j)=>j!==(i-managed.length)));
+  };
+  const addItem = () => setSuggested(p=>[...p,{
+    id:`m${Date.now()}`, source:"", caseTitle:"", content:"",
+    include:true, mode:"decision", customText:"", needsManagement:true
+  }]);
+
+  const handleMinutes = async (file) => {
+    if (!file) return;
+    setErr(""); setLoading("解析會議紀錄…");
+    try {
+      const data = await extractMinutes(file);
+      const m = (data?.managedItems||[]).filter(i=>i.isManaged).map(i=>({...i,include:true,mode:"decision",customText:""}));
+      const s = (data?.newItems||[]).filter(i=>i.needsManagement).map(i=>({...i,include:false,mode:"decision",customText:""}));
+      setManaged(m); setSuggested(s); setMinutesName(file.name);
+    } catch(e) { setErr("解析失敗："+e.message); }
+    setLoading(""); setStep(1);
+  };
+
+  const handleGenerate = async () => {
+    const tracked = allItems.filter(i=>i.include!==false);
+    // Need info, prescStats, clinics, proposals, sectionData from... nowhere since we removed those steps
+    // Generate with empty data for the removed sections
+    const emptyInfo = {org:"台北市醫師公會「健康台灣深耕計畫」",subtitle:"臺北市慢性病防治全人健康智慧整合照護計畫",meetingNo:"",theme:"",date:"",weekday:"",time:"",location:"",chair:"",dataDate:""};
+    try {
+      await generateAndDownloadDocx(
+        { info: emptyInfo, prescStats: null, clinics: DEFAULT_CLINICS, tracked, proposals: [], sectionData: {} },
+        `內部工作會議列管事項.docx`
+      );
+      setGenerated(true);
+    } catch(e) { setErr("下載失敗："+e.message); }
+  };
+
+  const Dot = ({n}) => (
+    <div style={{ display:"flex", flexDirection:"column", alignItems:"center", gap:3 }}>
+      <div style={{ width:26, height:26, borderRadius:"50%", background:step>=n?C.ink:C.border,
+        color:step>=n?"#e8dfc8":"#9a8660", display:"flex", alignItems:"center",
+        justifyContent:"center", fontSize:11, fontWeight:700 }}>{n+1}</div>
+      <span style={{ fontSize:10, color:step>=n?C.ink:"#9a8660", whiteSpace:"nowrap" }}>{STEPS[n]}</span>
+    </div>
+  );
+
+  return (
+    <div style={{ fontFamily:"'Noto Serif TC',STSong,serif", background:C.bg, minHeight:"100vh", color:C.ink }}>
+      {/* Header */}
+      <div style={{ background:C.ink, color:"#e8dfc8", padding:"22px 36px 16px", borderBottom:`3px solid ${C.gold}` }}>
+        <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between" }}>
+          <div>
+            <div style={{ fontSize:19, fontWeight:700, letterSpacing:".12em" }}>會議議程製作系統</div>
+            <div style={{ fontSize:11, marginTop:3, opacity:.65 }}>健康台灣深耕計畫　內部工作會議</div>
+          </div>
+          <button style={{ ...S.btnO, fontSize:12, padding:"6px 14px", color:"#e8dfc8", borderColor:"rgba(255,255,255,0.3)" }}
+            onClick={async()=>{
+              if (view==="archive") { setView("main"); return; }
+              setArchiveLoading(true);
+              try { const idx = await loadArchiveIndex(); setArchives(Array.isArray(idx)?idx:[]); } catch { setArchives([]); }
+              setArchiveLoading(false); setView("archive");
+            }}>
             {view==="archive"?"← 返回製作":"📁 歷次存檔"}
           </button>
         </div>
       </div>
 
-      <div style={{maxWidth:960,margin:"0 auto",padding:"24px 18px"}}>
+      <div style={{ maxWidth:960, margin:"0 auto", padding:"24px 18px" }}>
+
+        {/* Archive view */}
         {view==="archive" && (
           <div>
-            <div style={{fontSize:16,fontWeight:700,marginBottom:16}}>📁 歷次議程存檔</div>
-            {archiveLoading&&<div style={S.prog}>⏳ 載入中…</div>}
-            {!archiveLoading&&archives.length===0&&<div style={{color:C.muted,textAlign:"center",padding:32,fontSize:14}}>尚未有任何存檔紀錄。</div>}
-            {!archiveLoading&&archives.map(a=>(
-              <div key={a.id} style={{...S.card,padding:0,overflow:"hidden"}}>
-                <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"12px 18px"}}>
-                  <div><div style={{fontWeight:700,fontSize:14}}>{a.title}</div><div style={{fontSize:12,color:C.muted,marginTop:2}}>會議日期：{a.date}　存檔：{new Date(a.createdAt).toLocaleString("zh-TW")}</div></div>
-                  <button style={S.btnS()} onClick={async()=>{try{const record=await loadArchiveRecord(a.id);if(!record)return alert("找不到存檔資料");await generateAndDownloadDocx(
-        { info: record.info, prescStats: null, clinics: DEFAULT_CLINICS, tracked: record.tracked||[], proposals: record.proposals||[], sectionData: record.sectionData||{} },
-        `${record.title}議程（存檔）.docx`
-      );}catch(e){alert("下載失敗："+e.message);}}}>⬇ 下載</button>
+            <div style={{ fontSize:16, fontWeight:700, marginBottom:16 }}>📁 歷次議程存檔</div>
+            {archiveLoading && <div style={S.prog}>⏳ 載入中…</div>}
+            {!archiveLoading && archives.length===0 && <div style={{ color:C.muted, textAlign:"center", padding:32 }}>尚未有任何存檔紀錄。</div>}
+            {!archiveLoading && archives.map(a=>(
+              <div key={a.id} style={{ ...S.card, padding:0, overflow:"hidden" }}>
+                <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", padding:"12px 18px" }}>
+                  <div>
+                    <div style={{ fontWeight:700, fontSize:14 }}>{a.title}</div>
+                    <div style={{ fontSize:12, color:C.muted, marginTop:2 }}>
+                      會議日期：{a.date}　存檔：{new Date(a.createdAt).toLocaleString("zh-TW")}
+                    </div>
+                  </div>
+                  <button style={S.btnS()} onClick={async()=>{
+                    try {
+                      const record = await loadArchiveRecord(a.id);
+                      if (!record) return alert("找不到存檔資料");
+                      const emptyInfo = {org:"台北市醫師公會「健康台灣深耕計畫」",subtitle:"臺北市慢性病防治全人健康智慧整合照護計畫",meetingNo:record.title||"",theme:"",date:record.date||"",weekday:"",time:"",location:"",chair:"",dataDate:""};
+                      await generateAndDownloadDocx(
+                        { info: emptyInfo, prescStats: null, clinics: DEFAULT_CLINICS, tracked: record.tracked||[], proposals: [], sectionData: {} },
+                        `${record.title}議程（存檔）.docx`
+                      );
+                    } catch(e) { alert("下載失敗："+e.message); }
+                  }}>⬇ 下載</button>
                 </div>
               </div>
             ))}
           </div>
         )}
 
+        {/* Main workflow */}
         {view==="main" && (<>
-          <div style={{display:"flex",alignItems:"center",marginBottom:24}}>
+          {/* Step dots */}
+          <div style={{ display:"flex", alignItems:"center", marginBottom:24 }}>
             {STEPS.map((_,n)=>(
-              <div key={n} style={{display:"flex",alignItems:"center",flex:n<STEPS.length-1?1:"none"}}>
+              <div key={n} style={{ display:"flex", alignItems:"center", flex: n<STEPS.length-1 ? 1 : "none" }}>
                 <Dot n={n}/>
-                {n<STEPS.length-1&&<div style={{height:2,flex:1,background:step>n?C.ink:C.border,margin:"0 3px",marginBottom:14}}/>}
+                {n<STEPS.length-1 && <div style={{ height:2, flex:1, background:step>n?C.ink:C.border, margin:"0 3px", marginBottom:14 }}/>}
               </div>
             ))}
           </div>
 
-          {loading&&<div style={S.prog}>⏳ {loading}</div>}
-          {err&&<div style={S.err}>⚠ {err}</div>}
+          {loading && <div style={S.prog}>⏳ {loading}</div>}
+          {err && <div style={S.err}>⚠ {err}</div>}
 
-          {/* S0 */}
-          {step===0&&<div style={S.card}><div style={S.ch()}>步驟一　上傳前次會議紀錄</div><div style={S.cb}><UploadZone onFile={handleMinutes} fileRef={minutesRef} label="拖曳或點擊上傳會議紀錄" sub="支援 PDF、Word (.docx)"/>{minutesName&&<div style={{fontSize:12,color:C.muted,marginTop:8}}>✓ 已載入：{minutesName}</div>}</div></div>}
-
-          {/* S1 */}
-          {step===1&&<div style={S.card}><div style={S.ch()}>步驟二　設定本次會議基本資訊</div><AgendaForm info={info} onChange={setInfo}/><div style={{padding:"0 18px 18px",display:"flex",gap:10}}><button style={S.btnO} onClick={()=>setStep(0)}>← 上一步</button><button style={S.btn} onClick={()=>setStep(2)}>下一步 →</button></div></div>}
-
-          {/* S2 */}
-          {step===2&&<>
-            <div style={S.card}><div style={S.ch("#2e5d2e")}>步驟三　計畫推動現況</div><div style={S.cb}>
-              {/* 處方統計 */}
-              <div style={{fontWeight:700,fontSize:13,marginBottom:8}}>① 現行健康處方開立及執行情形</div>
-              <UploadZone onFile={handleExcel} fileRef={excelRef} label="上傳處方紀錄 Excel" sub="上傳後自動計算各類處方統計" accept=".xlsx,.xls"/>
-              {excelName&&<div style={{fontSize:12,color:C.muted,marginTop:6}}>✓ 已載入：{excelName}</div>}
-              {excelRows&&<div style={{marginTop:14}}>
-                <div style={{...S.row,gap:20,marginBottom:12,flexWrap:"wrap"}}>
-                  <div><div style={S.lbl}>本週截止日</div><input type="date" style={{...S.inp,maxWidth:180}} value={cutoffThis} onChange={e=>setCutoffThis(e.target.value)}/></div>
-                  <div><div style={S.lbl}>上週截止日</div><input type="date" style={{...S.inp,maxWidth:180}} value={cutoffLast} onChange={e=>setCutoffLast(e.target.value)}/></div>
-                </div>
-                {prescStats&&<div style={{overflowX:"auto"}}><table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
-                  <thead>
-                    <tr><th rowSpan={2} style={{background:C.ink,color:"#e8dfc8",padding:"5px 8px",border:"1px solid #555",width:"20%"}}>處方類別</th><th colSpan={3} style={{background:C.ink,color:"#e8dfc8",padding:"5px 8px",border:"1px solid #555",textAlign:"center"}}>處方數</th><th colSpan={3} style={{background:C.ink,color:"#e8dfc8",padding:"5px 8px",border:"1px solid #555",textAlign:"center"}}>已執行</th><th colSpan={3} style={{background:C.ink,color:"#e8dfc8",padding:"5px 8px",border:"1px solid #555",textAlign:"center"}}>執行率</th></tr>
-                    <tr>{["本週","上週","差異","本週","上週","差異","本週","上週","差異"].map((h,i)=><th key={i} style={{background:C.ink,color:"#e8dfc8",padding:"4px 6px",border:"1px solid #555",fontSize:10,textAlign:"center"}}>{h}</th>)}</tr>
-                  </thead>
-                  <tbody>
-                    {[...prescStats.rows,{label:"處方開立總數(各處方加總)",isTotal:true,...prescStats.total}].map((r,i)=>{
-                      const dO=r.open-(r.prevOpen||0),dE=r.exec-(r.prevExec||0),dR=parseFloat(r.rate)-(parseFloat(r.prevRate||"0"));
-                      const fmt=(d,isR)=>d===0?"0":d>0?`+${isR?d.toFixed(1)+"%":d}`:`${isR?d.toFixed(1)+"%":d}`;
-                      const dc=(v)=>typeof v==="string"&&v.startsWith("+")?"#2e7d32":v==="0"||v==="0%"?"#555":"#c62828";
-                      return <tr key={i} style={{background:r.isTotal?"#f5f0e8":"white",fontWeight:r.isTotal?700:400}}>
-                        <td style={{padding:"3px 8px",border:`1px solid ${C.border}`,fontSize:11}}>{r.label}</td>
-                        {[r.open,r.prevOpen||0,fmt(dO,false),r.exec,r.prevExec||0,fmt(dE,false),r.rate,r.prevRate||"0%",fmt(dR,true)].map((v,j)=>(
-                          <td key={j} style={{padding:"3px 6px",textAlign:"center",border:`1px solid ${C.border}`,fontSize:11,color:[2,5,8].includes(j)?dc(String(v)):"inherit"}}>{v}</td>
-                        ))}
-                      </tr>;
-                    })}
-                  </tbody>
-                </table></div>}
-              </div>}
-            </div></div>
-
-            {/* 診所拓點 */}
-            <div style={S.card}><div style={S.ch("#2e5d2e")}>② 診所拓點現況（數字從 Excel 自動更新）</div><div style={S.cb}><div style={{overflowX:"auto"}}>
-              <table style={{width:"100%",borderCollapse:"collapse",fontSize:12,minWidth:700}}>
-                <thead>
-                  <tr><th rowSpan={2} style={{background:C.ink,color:"#e8dfc8",padding:"5px 8px",border:"1px solid #555",width:"6%"}}>分類</th><th rowSpan={2} style={{background:C.ink,color:"#e8dfc8",padding:"5px 8px",border:"1px solid #555"}}>診所名稱</th><th rowSpan={2} style={{background:C.ink,color:"#e8dfc8",padding:"5px 8px",border:"1px solid #555",fontSize:10}}>預計教學時間</th><th colSpan={4} style={{background:C.ink,color:"#e8dfc8",padding:"5px 8px",border:"1px solid #555",fontSize:10,textAlign:"center"}}>設置情形</th><th colSpan={2} style={{background:C.ink,color:"#e8dfc8",padding:"5px 8px",border:"1px solid #555",textAlign:"center"}}>處方數量</th><th rowSpan={2} style={{background:C.ink,color:"#e8dfc8",padding:"5px 8px",border:"1px solid #555"}}>備註</th></tr>
-                  <tr>{["電子簽章","營養空間","禮券","營養諮詢","開立","執行"].map(h=><th key={h} style={{background:C.ink,color:"#e8dfc8",padding:"4px 6px",border:"1px solid #555",fontSize:10,textAlign:"center"}}>{h}</th>)}</tr>
-                </thead>
-                <tbody>
-                  {["自有營養師","已媒合","有空間待媒合","無空間"].map(grp=>{const items=clinics.filter(c=>c.group===grp);if(!items.length)return null;return items.map((c,i)=>(
-                    <tr key={c.id}>
-                      {i===0&&<td rowSpan={items.length} style={{textAlign:"center",verticalAlign:"middle",background:"#f5f0e8",fontSize:11,fontWeight:700,border:`1px solid ${C.border}`,padding:"4px 6px"}}>{grp}</td>}
-                      <td style={{padding:"3px 8px",border:`1px solid ${C.border}`,fontSize:12}}>{c.name}</td>
-                      <td style={{padding:"3px 6px",textAlign:"center",border:`1px solid ${C.border}`,fontSize:11}}>{c.teachTime}</td>
-                      {["eSig","nutrition","coupon","consultation"].map(f=><td key={f} style={{textAlign:"center",border:`1px solid ${C.border}`,padding:"3px 6px"}}><input type="checkbox" checked={!!c[f]} onChange={e=>updateClinic(c.id,f,e.target.checked)}/></td>)}
-                      <td style={{textAlign:"center",fontWeight:700,color:C.blue,border:`1px solid ${C.border}`,padding:"3px 6px"}}>{c.openCount}</td>
-                      <td style={{textAlign:"center",fontWeight:700,color:C.green,border:`1px solid ${C.border}`,padding:"3px 6px"}}>{c.execCount}</td>
-                      <td style={{border:`1px solid ${C.border}`,padding:"3px 6px",fontSize:11}}><input style={{width:"100%",border:"1px solid #ddd",padding:"2px 4px",fontSize:11}} value={c.note} onChange={e=>updateClinic(c.id,"note",e.target.value)}/></td>
-                    </tr>
-                  ));})}
-                </tbody>
-              </table>
-            </div></div></div>
-
-            {/* 課程開設現況 */}
-            <div style={S.card}><div style={S.ch("#2e5d2e")}>③ 目前課程開設現況</div><div style={S.cb}>
-              <CourseScheduleSection onDataChange={data=>updateSection("courses",data)}/>
-            </div></div>
-
-            {/* 五至九 */}
-            <div style={S.card}><div style={S.ch("#2e5d2e")}>④ 處方活動日課程表（可延續上次資料）</div><div style={S.cb}>
-              <PersistSection title="處方活動日課程表" sectionKey="prescriptionDayCourses" columns={PRESCRIPTION_DAY_COLS} defaultRow={PRESCRIPTION_DAY_DEFAULT} initialData={PRESCRIPTION_DAY_INITIAL} onDataChange={data=>updateSection("prescriptionDayCourses",data)}/>
-            </div></div>
-
-            <div style={S.card}><div style={S.ch("#2e5d2e")}>⑤ 曾參與說明會但未開課教師名單（可延續上次資料）</div><div style={S.cb}>
-              <PersistSection title="未開課師資" sectionKey="uninstructed" columns={UNINSTRUCTED_COLS} defaultRow={UNINSTRUCTED_DEFAULT} initialData={UNINSTRUCTED_INITIAL} onDataChange={data=>updateSection("uninstructed",data)}/>
-            </div></div>
-
-            <div style={S.card}><div style={S.ch("#2e5d2e")}>⑥ 潛在場地列表（可延續上次資料）</div><div style={S.cb}>
-              <PersistSection title="潛在場地" sectionKey="venues" columns={VENUE_COLS} defaultRow={VENUE_DEFAULT} initialData={VENUE_INITIAL} onDataChange={data=>updateSection("venues",data)}/>
-            </div></div>
-
-            <div style={S.card}><div style={S.ch("#2e5d2e")}>⑦⑧ 潛在課程及師資／未成功開課課程（可延續上次資料）</div><div style={S.cb}>
-              <PersistSection title="潛在課程" sectionKey="potentialCourses" columns={POTENTIAL_COURSE_COLS} defaultRow={POTENTIAL_COURSE_DEFAULT} initialData={POTENTIAL_COURSE_INITIAL} onDataChange={data=>updateSection("potentialCourses",data)}/>
-            </div></div>
-
-            {/* 時程表 */}
-            <div style={S.card}><div style={S.ch("#2e5d2e")}>⑨ 重要會議及活動時程（可延續上次資料）</div><div style={S.cb}>
-              <PersistSection title="重要時程" sectionKey="schedules" columns={SCHEDULE_COLS} defaultRow={SCHEDULE_DEFAULT} initialData={SCHEDULE_INITIAL} onDataChange={data=>updateSection("schedules",data)}/>
-            </div></div>
-
-            <div style={S.card}><div style={S.ch("#2e5d2e")}>⑩ 拜會處方執行相關單位時程（可延續上次資料）</div><div style={S.cb}>
-              <PersistSection title="拜會時程" sectionKey="visits" columns={VISIT_COLS} defaultRow={VISIT_DEFAULT} onDataChange={data=>updateSection("visits",data)}/>
-            </div></div>
-
-            <div style={{display:"flex",gap:10}}><button style={S.btnO} onClick={()=>setStep(1)}>← 上一步</button><button style={S.btn} onClick={()=>setStep(3)}>下一步 →</button></div>
-          </>}
-
-                    {/* S3 */}
-          {step===3&&<>
+          {/* Step 0: Upload */}
+          {step===0 && (
             <div style={S.card}>
-              <div style={S.ch()}>步驟四　列管事項確認</div>
+              <div style={S.ch()}>步驟一　上傳前次會議紀錄（選填）</div>
               <div style={S.cb}>
-                <div style={{fontSize:13,color:C.muted,marginBottom:16,lineHeight:1.8}}>
-                  請對照上次會議紀錄「歷次決議辦理情形」，逐筆填入列管事項。每筆選擇「繼續列管」或「解除列管」。
+                <div style={{ fontSize:13, color:C.muted, marginBottom:14, lineHeight:1.8 }}>
+                  上傳後系統會嘗試解析列管事項（不一定成功），也可以跳過直接手動填寫。
                 </div>
-
-                {/* 列管事項表格 */}
-                <div style={{overflowX:"auto",marginBottom:12}}>
-                  <table style={{width:"100%",borderCollapse:"collapse",fontSize:12,minWidth:700}}>
-                    <thead>
-                      <tr>
-                        {["來源（第X次 臨時動議X）","案由","決議事項摘要","本次辦理情形","本次決定",""].map((h,i)=>(
-                          <th key={i} style={{background:C.ink,color:"#e8dfc8",padding:"7px 10px",border:`1px solid #555`,
-                            fontSize:11,textAlign:"left",whiteSpace:"nowrap",
-                            width:i===4?"90px":i===5?"36px":"auto"}}>{h}</th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {[...managed,...suggested].map((item,i)=>{
-                        const isManaged = i < managed.length;
-                        const update = (val) => {
-                          if(isManaged){const n=[...managed];n[i]={...n[i],...val};setManaged(n);}
-                          else{const j=i-managed.length;const n=[...suggested];n[j]={...n[j],...val};setSuggested(n);}
-                        };
-                        const remove = () => {
-                          if(isManaged) setManaged(p=>p.filter((_,j)=>j!==i));
-                          else setSuggested(p=>p.filter((_,j)=>j!==(i-managed.length)));
-                        };
-                        const inp = {width:"100%",border:`1px solid ${C.border}`,padding:"5px 7px",fontSize:12,background:C.cream,fontFamily:"inherit"};
-                        return (
-                          <tr key={item.id||i} style={{background:i%2?"#fdf9f0":"white",
-                            opacity:item.include===false?0.45:1}}>
-                            <td style={{padding:"5px 6px",border:`1px solid ${C.border}`,verticalAlign:"top"}}>
-                              <input style={inp} value={item.source||""} onChange={e=>update({source:e.target.value})} placeholder="第十六次 臨時動議三"/>
-                            </td>
-                            <td style={{padding:"5px 6px",border:`1px solid ${C.border}`,verticalAlign:"top"}}>
-                              <input style={inp} value={item.caseTitle||""} onChange={e=>update({caseTitle:e.target.value})} placeholder="合約書研擬"/>
-                            </td>
-                            <td style={{padding:"5px 6px",border:`1px solid ${C.border}`,verticalAlign:"top"}}>
-                              <textarea style={{...inp,resize:"vertical",minHeight:52}} value={item.content||""} onChange={e=>update({content:e.target.value})} placeholder="原決議內容"/>
-                            </td>
-                            <td style={{padding:"5px 6px",border:`1px solid ${C.border}`,verticalAlign:"top"}}>
-                              {item.include && <>
-                                <div style={{display:"flex",gap:10,marginBottom:4}}>
-                                  {[["decision","依決議辦理"],["custom","另外填寫"]].map(([m,l])=>(
-                                    <label key={m} style={{display:"flex",alignItems:"center",gap:3,cursor:"pointer",fontSize:11,whiteSpace:"nowrap"}}>
-                                      <input type="radio" name={`mode-${item.id||i}`} checked={item.mode===m} onChange={()=>update({mode:m})}/>{l}
-                                    </label>
-                                  ))}
-                                </div>
-                                {item.mode==="custom" && (
-                                  <textarea style={{...inp,resize:"vertical",minHeight:44}} value={item.customText||""} onChange={e=>update({customText:e.target.value})} placeholder="辦理情形說明"/>
-                                )}
-                              </>}
-                              {item.include===false && <span style={{fontSize:11,color:"#aaa"}}>解除列管</span>}
-                            </td>
-                            <td style={{padding:"5px 6px",border:`1px solid ${C.border}`,textAlign:"center",verticalAlign:"middle"}}>
-                              <div style={{display:"flex",flexDirection:"column",gap:4,alignItems:"center"}}>
-                                <label style={{fontSize:11,cursor:"pointer",display:"flex",alignItems:"center",gap:3,
-                                  color:item.include!==false?C.blue:C.muted,fontWeight:item.include!==false?700:400}}>
-                                  <input type="radio" name={`inc-${item.id||i}`} checked={item.include!==false} onChange={()=>update({include:true})}/>繼續
-                                </label>
-                                <label style={{fontSize:11,cursor:"pointer",display:"flex",alignItems:"center",gap:3,
-                                  color:item.include===false?C.muted:C.muted,fontWeight:item.include===false?700:400}}>
-                                  <input type="radio" name={`inc-${item.id||i}`} checked={item.include===false} onChange={()=>update({include:false})}/>解除
-                                </label>
-                              </div>
-                            </td>
-                            <td style={{padding:"5px 6px",border:`1px solid ${C.border}`,textAlign:"center",verticalAlign:"middle"}}>
-                              <button onClick={remove} style={{background:"none",border:"none",cursor:"pointer",color:"#ccc",fontSize:16,lineHeight:1}}>✕</button>
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
+                <UploadZone onFile={handleMinutes} fileRef={minutesRef} label="拖曳或點擊上傳會議紀錄" sub="支援 PDF、Word (.docx)"/>
+                {minutesName && <div style={{ fontSize:12, color:C.muted, marginTop:8 }}>✓ 已載入：{minutesName}</div>}
+                <div style={{ marginTop:14 }}>
+                  <button style={S.btn} onClick={()=>setStep(1)}>跳過，直接填寫列管事項 →</button>
                 </div>
+              </div>
+            </div>
+          )}
 
-                <button style={{...S.btnS(),fontSize:12}} onClick={()=>{
-                  setSuggested(prev=>[...prev,{
-                    id:`m${Date.now()}`,source:"",caseTitle:"",content:"",
-                    include:true,mode:"decision",customText:"",needsManagement:true
-                  }]);
-                }}>＋ 新增一筆列管事項</button>
-
-                {[...managed,...suggested].length===0&&(
-                  <div style={{color:C.muted,fontSize:13,padding:"10px 0 0"}}>
-                    尚未有列管事項，請按上方按鈕新增。
+          {/* Step 1: Tracked items */}
+          {step===1 && (
+            <div>
+              <div style={S.card}>
+                <div style={S.ch()}>步驟二　列管事項確認</div>
+                <div style={S.cb}>
+                  <div style={{ fontSize:13, color:C.muted, marginBottom:16, lineHeight:1.8 }}>
+                    請對照上次會議紀錄，逐筆填入需要追蹤的列管事項。選擇繼續或解除列管，並填寫本次辦理情形。
                   </div>
-                )}
-              </div>
-            </div>
 
-            <div style={{display:"flex",gap:10}}>
-              <button style={S.btnO} onClick={()=>setStep(2)}>← 上一步</button>
-              <button style={S.btn} onClick={()=>setStep(4)}>下一步：加入提案 →</button>
-            </div>
-          </>}
+                  {allItems.map((item, i) => (
+                    <TrackedItemRow
+                      key={item.id||i}
+                      item={item}
+                      index={i}
+                      isManaged={i < managed.length}
+                      onUpdate={val=>updateItem(i,val)}
+                      onRemove={()=>removeItem(i)}
+                    />
+                  ))}
 
-                    {/* S4 */}
-          {step===4&&<>
-            <div style={S.card}><div style={S.ch("#4a1a7a")}>📋 步驟五　提案整合</div><div style={S.cb}>
-              <div style={{background:"#f0eaf8",border:"1px solid #b39ddb",borderRadius:2,padding:"14px 16px",marginBottom:16}}>
-                <div style={{fontWeight:700,fontSize:13,color:"#4a1a7a",marginBottom:6}}>🔗 從提案收集平台載入</div>
-                <div style={{fontSize:12,color:C.muted,marginBottom:10}}>自動載入平台上狀態為「已納入」的提案</div>
-                <button style={S.btnS("#5d3a9a")} onClick={async()=>{
-                  try{const approved=await loadApprovedProposals();if(!approved.length){alert("平台上目前沒有標記為「已納入」的提案");return;}
-                  const annotated=approved.map(p=>({id:p.id,proposer:p.proposer,caseTitle:p.caseTitle,description:p.description,section:p.section||"討論事項",include:true}));
-                  const existingIds=new Set(proposals.map(x=>x.id));const newOnes=annotated.filter(x=>!existingIds.has(x.id));
-                  setProposals(prev=>[...prev,...newOnes]);alert(`已載入 ${newOnes.length} 筆提案`);}catch(e){alert("載入失敗："+e.message);}
-                }}>↓ 從平台載入已核可提案</button>
-              </div>
-              <div style={{...S.lbl,marginBottom:8}}>或手動上傳提案單</div>
-              <UploadZone onFile={handleProposal} fileRef={proposalRef} label="拖曳或點擊上傳提案單" sub="支援 PDF、Word (.docx)，可重複上傳多份"/>
-              <div style={{fontSize:12,color:C.muted,marginTop:8}}>✦ AI 解析後建議分類，可手動調整</div>
-            </div></div>
-            {proposals.length>0&&<div style={S.card}><div style={S.ch("#4a1a7a")}>已整合提案（{proposals.length} 項）</div><div style={S.cb}>{proposals.map((p,i)=><ProposalCard key={p.id||i} prop={p} index={i} onChange={updateProposal} onRemove={()=>removeProposal(i)}/>)}</div></div>}
-            <div style={{display:"flex",gap:10}}><button style={S.btnO} onClick={()=>setStep(3)}>← 上一步</button><button style={S.btn} onClick={()=>setStep(5)}>{proposals.length===0?"略過，直接產生議程 →":"下一步：產生議程 →"}</button></div>
-          </>}
+                  <button style={{ ...S.btnS(), fontSize:12, marginTop: allItems.length?8:0 }} onClick={addItem}>
+                    ＋ 新增一筆列管事項
+                  </button>
 
-          {/* S5 */}
-          {step===5&&<div style={S.card}><div style={S.ch()}>步驟六　預覽議程並下載</div><div style={S.cb}>
-            <div style={{border:`2px solid ${C.border}`,borderRadius:2,overflow:"hidden",marginBottom:18}}>
-              <div style={{background:C.border,padding:"7px 14px",fontSize:12,color:C.muted,display:"flex",justifyContent:"space-between"}}>
-                <span>📄 議程預覽</span><span style={{fontSize:11}}>以下為實際輸出內容</span>
+                  {allItems.length===0 && (
+                    <div style={{ color:C.muted, fontSize:13, padding:"10px 0 0" }}>
+                      尚未有列管事項，請按上方按鈕新增。
+                    </div>
+                  )}
+                </div>
               </div>
-              <div style={{padding:"24px 32px",background:"#fff",fontFamily:"'Noto Serif TC',STSong,serif",fontSize:13,lineHeight:2.1}}>
-                <div style={{textAlign:"center",fontWeight:700,fontSize:14}}>{info.org}</div>
-                <div style={{textAlign:"center",fontSize:12}}>{info.subtitle}</div>
-                <div style={{textAlign:"center",fontWeight:700,fontSize:14,marginBottom:4}}>{info.meetingNo}內部工作會議{info.theme?`：${info.theme}`:""}　會議議程</div>
-                <div style={{textAlign:"center",fontSize:12,color:C.muted}}>時間：{info.date}（星期{info.weekday}）{info.time}</div>
-                <div style={{textAlign:"center",fontSize:12,color:C.muted,marginBottom:8}}>地點：{info.location}　主席：{info.chair}</div>
-                <hr style={{borderTop:`1.5px solid ${C.ink}`,margin:"8px 0 12px"}}/>
-                <div style={{fontWeight:700,marginBottom:4}}>壹、主席致詞</div>
-                <div style={{fontWeight:700,marginBottom:4}}>貳、計畫推動現況</div>
-                {["一、現行健康處方開立及執行情形","二、目前診所拓點現況","三、目前課程開設現況","四、本月份健康處方課程表","五、處方活動日課程表","六、曾參與說明會但未開課教師名單","七、潛在場地列表","八、潛在課程及師資列表","九、未成功開課及可直接開課之課程列表"].map(s=><div key={s} style={{paddingLeft:"2em",fontSize:12}}>{s}</div>)}
-                <div style={{fontWeight:700,marginBottom:4,marginTop:8}}>參、確認歷次健康台灣深耕計畫會議紀錄暨決議辦理情形</div>
-                {[...managed.filter(i=>i.include),...suggested.filter(i=>i.include)].length===0
-                  ?<div style={{paddingLeft:"2em",fontSize:12,color:C.muted}}>（本次無列管追蹤事項）</div>
-                  :[...managed.filter(i=>i.include),...suggested.filter(i=>i.include)].map((item,j)=>(
-                  <div key={j} style={{margin:"6px 2em",padding:"8px 12px",border:`1px solid ${C.border}`,borderRadius:1,fontSize:12}}>
-                    <div><strong>【{item.source}】</strong>案由：{item.caseTitle}</div>
-                    <div><strong>本次辦理情形：</strong>{item.mode==="decision"?"依決議辦理。":(item.customText||"（待填寫）")}</div>
-                  </div>
-                ))}
-                {[["肆、報告事項","報告事項"],["伍、討論事項","討論事項"],["陸、臨時動議","臨時動議"]].map(([label,sec])=>(
-                  <div key={sec}>
-                    <div style={{fontWeight:700,marginBottom:4,marginTop:8}}>{label}</div>
-                    {proposals.filter(p=>p.include&&p.section===sec).length===0&&sec!=="肆、報告事項"&&<div style={{paddingLeft:"2em",fontSize:12,color:C.muted}}>（無）</div>}
-                    {proposals.filter(p=>p.include&&p.section===sec).map((p,j)=>(
-                      <div key={j} style={{margin:"4px 2em",padding:"6px 12px",border:`1px solid ${C.border}`,borderRadius:1,fontSize:12,borderLeft:`3px solid ${SC[sec]||C.gold}`}}>
-                        <div><strong>第{cnums[j]||j+1}案</strong>　提案人：{p.proposer}　案由：{p.caseTitle}</div>
-                        {sec==="討論事項"&&<div style={{marginTop:4,color:"#aaa"}}>決議：＿＿＿＿＿＿</div>}
-                      </div>
-                    ))}
-                  </div>
-                ))}
-                <div style={{fontWeight:700,marginTop:8}}>柒、散會</div>
+
+              {generated && <div style={S.ok}>✓ 已下載！</div>}
+
+              <div style={{ display:"flex", gap:10 }}>
+                <button style={S.btnO} onClick={()=>setStep(0)}>← 上一步</button>
+                <button style={S.btn} onClick={handleGenerate}>⬇ 下載列管事項 .docx</button>
               </div>
             </div>
-            {generated&&<div style={S.ok}>✓ 議程 .docx 已下載並存檔！可在「歷次存檔」查閱。</div>}
-            <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
-              <button style={S.btnO} onClick={()=>setStep(4)}>← 返回修改</button>
-              <button style={S.btn} onClick={handleGenerate}>⬇ 下載議程 .docx</button>
-            </div>
-          </div></div>}
+          )}
         </>)}
       </div>
     </div>
@@ -1828,6 +1745,7 @@ function App() {
 }
 
 ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+
 </script>
 </body>
 </html>
