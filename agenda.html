@@ -864,6 +864,71 @@ function ProposalCard({prop,index,onChange,onRemove}) {
   </div>;
 }
 
+// ── PasteParser: paste text → AI extracts tracked items ──────
+function PasteParser({ onParsed }) {
+  const [text, setText] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [open, setOpen] = useState(false);
+
+  const handleParse = async () => {
+    if (!text.trim()) return;
+    setLoading(true);
+    try {
+      const prompt = `以下是會議紀錄中「歷次決議辦理情形」的文字內容。請擷取所有列管事項，以 JSON 陣列回傳，不要有其他文字：
+[{"source":"來源（例：第十四次臨時動議三）","caseTitle":"案由標題","content":"原決議事項摘要（2-4句）","status":"追蹤辦理情形摘要"}]
+只擷取標記為「繼續列管」（含☑繼續列管、□解除列管☑繼續列管等）的項目。
+
+文字內容：
+${text}`;
+      const res = await fetch(API, {
+        method:"POST", headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({ model:"claude-sonnet-4-20250514", max_tokens:4000,
+          messages:[{role:"user",content:prompt}] })
+      });
+      const d = await res.json();
+      const raw = d.content?.[0]?.text || "[]";
+      const items = JSON.parse(raw.replace(/```json
+?|```/g,"").trim());
+      if (Array.isArray(items) && items.length > 0) {
+        onParsed(items);
+        setText(""); setOpen(false);
+        alert(`✓ 解析完成，共 ${items.length} 筆列管事項已加入下方清單`);
+      } else {
+        alert("未解析到列管事項，請確認貼入的內容包含「繼續列管」字樣");
+      }
+    } catch(e) { alert("解析失敗："+e.message); }
+    setLoading(false);
+  };
+
+  return (
+    <div style={{marginBottom:14}}>
+      <button style={{...S.btnS("#1565c0"),fontSize:12,marginBottom:open?10:0}}
+        onClick={()=>setOpen(x=>!x)}>
+        {open?"▲ 收起":"📋 貼上會議紀錄文字讓 AI 解析列管事項"}
+      </button>
+      {open && <>
+        <div style={{fontSize:12,color:C.muted,marginBottom:6}}>
+          請從 PDF/Word 複製「歷次決議辦理情形」整個表格文字，貼到下方
+        </div>
+        <textarea
+          value={text} onChange={e=>setText(e.target.value)}
+          style={{...S.ta,minHeight:140,marginBottom:8,fontSize:12}}
+          placeholder={"例：
+第十四次臨時動議三
+合約書研擬。
+（一）三款合約書已送請法律顧問審閱...
+☑繼續列管
+（一）依決議辦理..."}
+        />
+        <button style={S.btn} onClick={handleParse} disabled={loading||!text.trim()}>
+          {loading?"解析中…":"✦ AI 解析"}
+        </button>
+      </>}
+    </div>
+  );
+}
+
+
 function UploadZone({onFile,label,sub,fileRef,accept=".pdf,.docx"}) {
   return <div style={S.drop} onDragOver={e=>e.preventDefault()} onDrop={e=>{e.preventDefault();onFile(e.dataTransfer.files[0]);}} onClick={()=>fileRef?.current?.click()}>
     <div style={{fontSize:28,marginBottom:6}}>📎</div>
@@ -1389,10 +1454,8 @@ function App() {
       const data=await extractMinutes(file);
       const managed=(data?.managedItems||[]).filter(i=>i.isManaged).map(i=>({...i,include:true,mode:"decision",customText:""}));
       const suggested=(data?.newItems||[]).filter(i=>i.needsManagement).map(i=>({...i,include:false,mode:"decision",customText:""}));
-      if(managed.length===0&&suggested.length===0){
-        setErr("⚠ AI 未解析到任何事項，可能是 API 回應格式有誤。已自動跳至下一步，可直接繼續。");
-      }
-      setManaged(managed);setSuggested(suggested);setMinutesName(file.name);setStep(1);
+      setManaged(managed);setSuggested(suggested);setMinutesName(file.name);
+      setStep(1);
     }
     catch(e){setErr("解析失敗："+e.message);}setLoading("");
   };
@@ -1569,86 +1632,93 @@ function App() {
 
                     {/* S3 */}
           {step===3&&<>
-            {/* ── 手動列管輸入區 ── */}
             <div style={S.card}>
               <div style={S.ch()}>步驟四　列管事項確認</div>
               <div style={S.cb}>
                 <div style={{fontSize:13,color:C.muted,marginBottom:14,lineHeight:1.8}}>
-                  以下是從會議紀錄解析出的事項（若為空可手動新增）。請為每筆選擇<strong>繼續列管</strong>或<strong>解除列管</strong>，繼續列管者請填寫辦理情形。
+                  請從會議紀錄中，將「歷次決議辦理情形」表格的內容複製貼到下方，系統會解析出各筆列管事項。或直接手動新增。
                 </div>
 
-                {/* 已解析項目 */}
-                {[...managed, ...suggested].length > 0 && (
-                  <div style={{marginBottom:16}}>
-                    {[...managed, ...suggested].map((item, i) => {
-                      const allItems = [...managed, ...suggested];
-                      const isManaged = i < managed.length;
-                      const updateItem = (newVal) => {
-                        if (isManaged) {
-                          const n=[...managed]; n[i]={...n[i],...newVal}; setManaged(n);
-                        } else {
-                          const idx=i-managed.length; const n=[...suggested]; n[idx]={...n[idx],...newVal}; setSuggested(n);
-                        }
-                      };
-                      return (
-                        <div key={item.id||i} style={{...S.ibox,marginBottom:10,borderLeft:`3px solid ${item.include?C.blue:C.border}`}}>
-                          <div style={{display:"flex",gap:10,marginBottom:8,flexWrap:"wrap"}}>
-                            <div style={{flex:1,minWidth:200}}>
-                              <div style={{fontSize:11,color:C.muted,marginBottom:3}}>來源</div>
-                              <input style={{...S.inp}} value={item.source||""} onChange={e=>updateItem({source:e.target.value})} placeholder="例：第十六次臨時動議三"/>
-                            </div>
-                            <div style={{flex:2,minWidth:200}}>
-                              <div style={{fontSize:11,color:C.muted,marginBottom:3}}>案由</div>
-                              <input style={{...S.inp}} value={item.caseTitle||""} onChange={e=>updateItem({caseTitle:e.target.value})} placeholder="案由標題"/>
-                            </div>
-                          </div>
-                          <div style={{marginBottom:8}}>
-                            <div style={{fontSize:11,color:C.muted,marginBottom:3}}>決議事項</div>
-                            <textarea style={{...S.ta,minHeight:48}} value={item.content||""} onChange={e=>updateItem({content:e.target.value})} placeholder="原決議內容摘要"/>
-                          </div>
-                          {/* 繼續/解除列管 toggle */}
-                          <div style={{display:"flex",gap:16,alignItems:"center",marginBottom:item.include?8:0}}>
-                            <span style={{fontSize:12}}>本次：</span>
-                            {[["繼續列管",true],["解除列管",false]].map(([label,val])=>(
-                              <label key={label} style={{display:"flex",alignItems:"center",gap:5,cursor:"pointer",fontSize:13,
-                                color:item.include===val?(val?C.blue:C.muted):C.muted,fontWeight:item.include===val?700:400}}>
-                                <input type="radio" name={`inc-${item.id||i}`} checked={item.include===val} onChange={()=>updateItem({include:val})}/>
-                                {label}
-                              </label>
-                            ))}
-                          </div>
-                          {item.include && (
-                            <div style={{marginTop:8}}>
-                              <div style={{fontSize:11,color:C.muted,marginBottom:3}}>本次會議追蹤辦理情形</div>
-                              <div style={{display:"flex",gap:8,marginBottom:6}}>
-                                {[["decision","依決議辦理"],["custom","另外輸入"]].map(([m,l])=>(
-                                  <label key={m} style={{display:"flex",alignItems:"center",gap:4,cursor:"pointer",fontSize:12}}>
-                                    <input type="radio" name={`mode-${item.id||i}`} checked={item.mode===m} onChange={()=>updateItem({mode:m})}/>{l}
-                                  </label>
-                                ))}
-                              </div>
-                              {item.mode==="custom" && (
-                                <textarea style={{...S.ta,minHeight:56}} value={item.customText||""} onChange={e=>updateItem({customText:e.target.value})} placeholder="請輸入辦理情形說明"/>
-                              )}
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
+                {/* 貼上解析區 */}
+                <PasteParser onParsed={(items)=>{
+                  const newItems = items.map(item=>({
+                    ...item,
+                    id:`m${Date.now()}${Math.random().toString(36).slice(2,5)}`,
+                    include:true, mode:"decision", customText:""
+                  }));
+                  setManaged(prev=>[...prev,...newItems]);
+                }}/>
 
-                {/* 手動新增按鈕 */}
-                <button style={{...S.btnO,fontSize:12,marginBottom:8}} onClick={()=>{
+                <div style={{borderTop:`1px solid ${C.border}`,margin:"16px 0 12px"}}/>
+
+                {/* 列管事項清單 */}
+                {[...managed,...suggested].map((item, i) => {
+                  const isManaged = i < managed.length;
+                  const updateItem = (newVal) => {
+                    if (isManaged) {
+                      const n=[...managed]; n[i]={...n[i],...newVal}; setManaged(n);
+                    } else {
+                      const idx=i-managed.length; const n=[...suggested]; n[idx]={...n[idx],...newVal}; setSuggested(n);
+                    }
+                  };
+                  const removeItem = () => {
+                    if (isManaged) setManaged(prev=>prev.filter((_,j)=>j!==i));
+                    else setSuggested(prev=>prev.filter((_,j)=>j!==(i-managed.length)));
+                  };
+                  return (
+                    <div key={item.id||i} style={{...S.ibox,marginBottom:10,position:"relative",
+                      borderLeft:`3px solid ${item.include?C.blue:C.border}`}}>
+                      <button onClick={removeItem} style={{position:"absolute",top:8,right:10,background:"none",border:"none",cursor:"pointer",color:"#bbb",fontSize:16}}>✕</button>
+                      <div style={{display:"flex",gap:10,marginBottom:8,flexWrap:"wrap",paddingRight:24}}>
+                        <div style={{flex:"0 0 180px"}}>
+                          <div style={S.lbl}>來源</div>
+                          <input style={S.inp} value={item.source||""} onChange={e=>updateItem({source:e.target.value})} placeholder="第X次 臨時動議X"/>
+                        </div>
+                        <div style={{flex:1,minWidth:180}}>
+                          <div style={S.lbl}>案由</div>
+                          <input style={S.inp} value={item.caseTitle||""} onChange={e=>updateItem({caseTitle:e.target.value})} placeholder="案由標題"/>
+                        </div>
+                      </div>
+                      <div style={{marginBottom:8}}>
+                        <div style={S.lbl}>決議事項</div>
+                        <textarea style={{...S.ta,minHeight:48}} value={item.content||""} onChange={e=>updateItem({content:e.target.value})} placeholder="原決議內容摘要"/>
+                      </div>
+                      <div style={{display:"flex",gap:16,alignItems:"center",marginBottom:item.include?8:0}}>
+                        <span style={{fontSize:12,color:C.muted}}>本次：</span>
+                        {[["繼續列管",true],["解除列管",false]].map(([label,val])=>(
+                          <label key={label} style={{display:"flex",alignItems:"center",gap:5,cursor:"pointer",fontSize:13,
+                            color:item.include===val?(val?C.blue:"#888"):C.muted,fontWeight:item.include===val?700:400}}>
+                            <input type="radio" name={`inc-${item.id||i}`} checked={item.include===val} onChange={()=>updateItem({include:val})}/>
+                            {label}
+                          </label>
+                        ))}
+                      </div>
+                      {item.include && <>
+                        <div style={{display:"flex",gap:18,marginBottom:6}}>
+                          {[["decision","依決議辦理"],["custom","另外輸入說明"]].map(([m,l])=>(
+                            <label key={m} style={{display:"flex",alignItems:"center",gap:4,cursor:"pointer",fontSize:12}}>
+                              <input type="radio" name={`mode-${item.id||i}`} checked={item.mode===m} onChange={()=>updateItem({mode:m})}/>{l}
+                            </label>
+                          ))}
+                        </div>
+                        {item.mode==="custom" && (
+                          <textarea style={{...S.ta,minHeight:56}} value={item.customText||""} onChange={e=>updateItem({customText:e.target.value})} placeholder="請輸入本次辦理情形說明"/>
+                        )}
+                      </>}
+                    </div>
+                  );
+                })}
+
+                <button style={{...S.btnO,fontSize:12}} onClick={()=>{
                   setSuggested(prev=>[...prev,{
                     id:`m${Date.now()}`,source:"",caseTitle:"",content:"",
                     include:true,mode:"decision",customText:"",needsManagement:true
                   }]);
-                }}>＋ 手動新增列管事項</button>
+                }}>＋ 手動新增一筆</button>
 
                 {[...managed,...suggested].length===0 && (
-                  <div style={{color:C.muted,fontSize:13,padding:"8px 0"}}>
-                    尚未解析到任何事項，可點上方按鈕手動新增，或直接繼續。
+                  <div style={{color:C.muted,fontSize:13,padding:"8px 0 0"}}>
+                    尚未有任何列管事項，可貼上紀錄內容解析，或手動新增。
                   </div>
                 )}
               </div>
