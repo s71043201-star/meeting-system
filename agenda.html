@@ -1,0 +1,528 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>會議議程製作系統｜健康台灣深耕計畫</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"></script>
+<script type="module">
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+  import { getDatabase, ref, get, set } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-database.js";
+  const firebaseConfig = {
+    apiKey: "AIzaSyCrmUX0jyeXWgnbfVHVkxLN18ZwImx2hE4",
+    authDomain: "tpma-meating-create.firebaseapp.com",
+    databaseURL: "https://tpma-meating-create-default-rtdb.asia-southeast1.firebasedatabase.app",
+    projectId: "tpma-meating-create",
+    storageBucket: "tpma-meating-create.firebasestorage.app",
+    messagingSenderId: "667469548556",
+    appId: "1:667469548556:web:20ec75be9148cd70837229"
+  };
+  const app = initializeApp(firebaseConfig);
+  const db = getDatabase(app);
+  window.fbGet = async (key) => { const s = await get(ref(db,key)); return s.exists()?s.val():null; };
+  window.fbSet = async (key, val) => { await set(ref(db,key), val); };
+  window.firebaseReady = true;
+  window.dispatchEvent(new Event("firebaseReady"));
+</script>
+<style>* { box-sizing: border-box; margin: 0; padding: 0; } body { font-family: 'Noto Serif TC',STSong,serif; background:#f4efe4; color:#1e1a12; } input,textarea,select,button{font-family:inherit;}</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel" data-presets="react">
+const { useState, useEffect, useRef, useCallback } = React;
+const API = "https://api.anthropic.com/v1/messages";
+
+// ── Firebase ──────────────────────────────────────────────────
+const waitFB = () => new Promise(res => { if(window.firebaseReady) return res(); window.addEventListener("firebaseReady",res,{once:true}); });
+async function fbLoad(key) { await waitFB(); return window.fbGet(key); }
+async function fbSave(key,val) { await waitFB(); return window.fbSet(key,val); }
+async function loadApprovedProposals() {
+  const v = await fbLoad("proposals/all");
+  if (!v) return [];
+  return Object.values(v).filter(p=>p.status==="已納入");
+}
+async function loadArchiveIndex() { const v = await fbLoad("agenda/index"); return v||[]; }
+async function saveArchive(record) {
+  const key = `agenda/archives/${record.id}`;
+  await fbSave(key, record);
+  let idx = await loadArchiveIndex();
+  if (!Array.isArray(idx)) idx = [];
+  idx = [{id:record.id,title:record.title,date:record.date,createdAt:record.createdAt},...idx].slice(0,20);
+  await fbSave("agenda/index", idx);
+}
+async function loadArchiveRecord(id) { return fbLoad(`agenda/archives/${id}`); }
+
+// ── File helpers ──────────────────────────────────────────────
+function parseDate(val) {
+  if (!val) return null;
+  const m = String(val).trim().match(/(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})/);
+  return m ? new Date(+m[1],+m[2]-1,+m[3]) : null;
+}
+async function parseExcel(file) {
+  return new Promise((res,rej)=>{
+    const r=new FileReader();
+    r.onload=e=>{try{const wb=XLSX.read(e.target.result,{type:"array"});const ws=wb.Sheets[wb.SheetNames[0]];res(XLSX.utils.sheet_to_json(ws,{header:1}));}catch(err){rej(err);}};
+    r.onerror=rej; r.readAsArrayBuffer(file);
+  });
+}
+function computeStats(rows, cutoffThis, cutoffLast) {
+  const ORDER = ["運動處方","營養處方","社會處方","情緒調適處方"];
+  const makeWin = s => { if(!s) return null; const e=new Date(s); e.setHours(23,59,59); const st=new Date(s); st.setDate(st.getDate()-6); st.setHours(0,0,0); return {start:st,end:e}; };
+  const thisWin=makeWin(cutoffThis), lastWin=makeWin(cutoffLast);
+  const mk=()=>{ const s={}; ORDER.forEach(k=>s[k]={open:0,exec:0}); return s; };
+  const cumThis=mk(), cumLast=mk();
+  for(let i=1;i<rows.length;i++){
+    const r=rows[i]; const pt=r[6]; const ex=r[14]; const d=parseDate(r[21]);
+    if(!pt||cumThis[pt]===undefined) continue;
+    const isEx=ex==="V"||ex==="v"||ex===true;
+    if(!thisWin||d<=thisWin.end){cumThis[pt].open++;if(isEx)cumThis[pt].exec++;}
+    if(lastWin&&d&&d<=lastWin.end){cumLast[pt].open++;if(isEx)cumLast[pt].exec++;}
+  }
+  const sum=(o,f)=>ORDER.reduce((s,k)=>s+o[k][f],0);
+  const rate=(e,o)=>o?(e/o*100).toFixed(1)+"%":"0%";
+  return {
+    rows:ORDER.map(k=>({label:k,open:cumThis[k].open,exec:cumThis[k].exec,rate:rate(cumThis[k].exec,cumThis[k].open),
+      prevOpen:lastWin?cumLast[k].open:0,prevExec:lastWin?cumLast[k].exec:0,prevRate:lastWin?rate(cumLast[k].exec,cumLast[k].open):"0%"})),
+    total:{open:sum(cumThis,"open"),exec:sum(cumThis,"exec"),rate:rate(sum(cumThis,"exec"),sum(cumThis,"open")),
+      prevOpen:lastWin?sum(cumLast,"open"):0,prevExec:lastWin?sum(cumLast,"exec"):0,prevRate:lastWin?rate(sum(cumLast,"exec"),sum(cumLast,"open")):"0%"}
+  };
+}
+async function docxToText(file) {
+  return new Promise((res,rej)=>{const r=new FileReader();r.onload=async e=>{try{const result=await mammoth.extractRawText({arrayBuffer:e.target.result});res(result.value);}catch(err){rej(err);}};r.onerror=rej;r.readAsArrayBuffer(file);});
+}
+async function fileToBase64(file) {
+  return new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(r.result.split(",")[1]);r.onerror=rej;r.readAsDataURL(file);});
+}
+function parseJSON(t,fb){try{return JSON.parse(t.replace(/```json\n?|```/g,"").trim());}catch{return fb;}}
+async function extractMinutes(file) {
+  const prompt=`請從這份會議紀錄中擷取資訊，以 JSON 格式回傳：{"managedItems":[{"id":"m1","source":"來源","caseTitle":"案由","content":"決議摘要","status":"辦理情形摘要","isManaged":true}],"newItems":[{"id":"n1","source":"來源","caseTitle":"案由","content":"摘要","needsManagement":true,"reason":"理由"}]}`;
+  if(file.name.toLowerCase().endsWith(".pdf")){
+    const b64=await fileToBase64(file);
+    const res=await fetch(API,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:1000,messages:[{role:"user",content:[{type:"document",source:{type:"base64",media_type:"application/pdf",data:b64}},{type:"text",text:prompt}]}]})});
+    const d=await res.json(); return parseJSON(d.content?.[0]?.text??"{}",{managedItems:[],newItems:[]});
+  } else {
+    const raw=await docxToText(file);
+    const res=await fetch(API,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:1000,messages:[{role:"user",content:`${prompt}\n\n會議紀錄：\n\n${raw}`}]})});
+    const d=await res.json(); return parseJSON(d.content?.[0]?.text??"{}",{managedItems:[],newItems:[]});
+  }
+}
+async function extractProposal(file) {
+  const prompt=`請從這份提案單中擷取所有提案，以 JSON 陣列回傳：[{"id":"p1","proposer":"提案人","caseTitle":"案由","description":"說明","suggestedSection":"討論事項或報告事項或臨時動議"}]`;
+  if(file.name.toLowerCase().endsWith(".pdf")){
+    const b64=await fileToBase64(file);
+    const res=await fetch(API,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:1000,messages:[{role:"user",content:[{type:"document",source:{type:"base64",media_type:"application/pdf",data:b64}},{type:"text",text:prompt}]}]})});
+    const d=await res.json(); return parseJSON(d.content?.[0]?.text??"[]",[]);
+  } else {
+    const raw=await docxToText(file);
+    const res=await fetch(API,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:1000,messages:[{role:"user",content:`${prompt}\n\n提案單：\n\n${raw}`}]})});
+    const d=await res.json(); const r=parseJSON(d.content?.[0]?.text??"[]",[]); return Array.isArray(r)?r:[];
+  }
+}
+async function polishText(raw) {
+  const res=await fetch(API,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:1000,system:"你是擅長撰寫公文的秘書。請將口語敘述整理成正式公文格式，語氣簡潔條理清晰，繁體中文。只輸出整理後文字。",messages:[{role:"user",content:raw}]})});
+  const d=await res.json(); return d.content?.[0]?.text??raw;
+}
+
+// ── Design ────────────────────────────────────────────────────
+const C={ink:"#1e1a12",gold:"#8b6914",cream:"#fdf8ee",bg:"#f4efe4",border:"#d4c49a",muted:"#7a6540",blue:"#1565c0",green:"#2e7d32",purple:"#5d3a9a"};
+const SC={"討論事項":C.blue,"報告事項":C.green,"臨時動議":C.purple};
+const cnums=["一","二","三","四","五","六","七","八","九","十"];
+const S={
+  card:{background:"#fff",border:`1px solid ${C.border}`,borderRadius:2,marginBottom:20,boxShadow:`2px 2px 0 ${C.border}`},
+  ch:(bg)=>({background:bg||C.ink,color:"#e8dfc8",padding:"9px 18px",fontSize:13,fontWeight:700,letterSpacing:".09em"}),
+  cb:{padding:18},
+  btn:{background:C.ink,color:"#e8dfc8",border:"none",padding:"9px 24px",fontSize:13,cursor:"pointer",borderRadius:1},
+  btnO:{background:"transparent",color:C.ink,border:`1px solid ${C.ink}`,padding:"8px 18px",fontSize:12,cursor:"pointer",borderRadius:1},
+  btnS:(bg)=>({background:bg||C.gold,color:"#fff",border:"none",padding:"5px 12px",fontSize:11,cursor:"pointer",borderRadius:1}),
+  tag:(bg)=>({display:"inline-block",background:bg,color:"#fff",fontSize:11,padding:"1px 7px",borderRadius:10,marginRight:5}),
+  ibox:{border:`1px solid ${C.border}`,padding:"11px 14px",marginBottom:10,background:C.cream,borderRadius:1},
+  inp:{width:"100%",border:`1px solid ${C.border}`,padding:"7px 10px",fontSize:13,borderRadius:1,boxSizing:"border-box"},
+  ta:{width:"100%",border:`1px solid ${C.border}`,padding:"7px 10px",fontSize:13,borderRadius:1,minHeight:68,resize:"vertical",boxSizing:"border-box"},
+  lbl:{fontSize:11,color:C.muted,fontWeight:700,marginBottom:3},
+  drop:{border:`2px dashed ${C.gold}`,borderRadius:2,padding:"28px 20px",textAlign:"center",cursor:"pointer",background:C.cream},
+  ok:{background:"#e8f5e9",border:"1px solid #4caf50",padding:"9px 14px",borderRadius:1,fontSize:13,color:"#2e7d32",marginBottom:14},
+  prog:{color:C.gold,fontStyle:"italic",fontSize:13,padding:"8px 0"},
+  err:{color:"#c0392b",fontSize:13,marginBottom:10},
+  row:{display:"flex",gap:12},
+};
+
+function UploadZone({onFile,label,sub,fileRef,accept=".pdf,.docx"}) {
+  return <div style={S.drop} onDragOver={e=>e.preventDefault()} onDrop={e=>{e.preventDefault();onFile(e.dataTransfer.files[0]);}} onClick={()=>fileRef?.current?.click()}>
+    <div style={{fontSize:28,marginBottom:6}}>📎</div>
+    <div style={{fontWeight:700,marginBottom:3,fontSize:14}}>{label}</div>
+    <div style={{fontSize:12,color:C.muted}}>{sub}</div>
+    <input ref={fileRef} type="file" accept={accept} style={{display:"none"}} onChange={e=>{onFile(e.target.files[0]);e.target.value="";}}/>
+  </div>;
+}
+
+function TrackedCard({item,index,onChange}) {
+  const [polishing,setPolishing]=useState(false);
+  const handlePolish=async()=>{if(!item.customText?.trim())return;setPolishing(true);const t=await polishText(item.customText);onChange(index,{...item,customText:t});setPolishing(false);};
+  return <div style={S.ibox}>
+    <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:8}}>
+      <div style={{flex:1}}><span style={S.tag(C.ink)}>{item.source}</span><strong style={{fontSize:13}}>{item.caseTitle}</strong>{item.reason&&<span style={{fontSize:11,color:C.gold,marginLeft:6}}>★ {item.reason}</span>}</div>
+      <label style={{display:"flex",alignItems:"center",gap:5,cursor:"pointer",fontSize:12,whiteSpace:"nowrap",marginLeft:8}}>
+        <input type="checkbox" checked={item.include} onChange={e=>onChange(index,{...item,include:e.target.checked})}/> 納入議程
+      </label>
+    </div>
+    {item.include && <>
+      <div style={{fontSize:11,color:"#555",padding:"5px 8px",background:"#f0ead6",borderRadius:1,marginBottom:8,lineHeight:1.7}}>{item.content}{item.status&&<><br/><em style={{color:C.muted}}>辦理情形：{item.status}</em></>}</div>
+      <div style={{display:"flex",gap:18,marginBottom:6}}>
+        {[["decision","依決議辦理"],["custom","另外輸入說明"]].map(([m,l])=>(
+          <label key={m} style={{display:"flex",alignItems:"center",gap:5,cursor:"pointer",fontSize:12}}>
+            <input type="radio" name={`m-${index}-${item.id}`} checked={item.mode===m} onChange={()=>onChange(index,{...item,mode:m})}/> {l}
+          </label>
+        ))}
+      </div>
+      {item.mode==="custom"&&<><textarea style={S.ta} value={item.customText||""} placeholder="請輸入辦理情形說明（口語也可以）" onChange={e=>onChange(index,{...item,customText:e.target.value})}/><button style={{...S.btnS(),marginTop:5}} onClick={handlePolish} disabled={polishing}>{polishing?"整理中…":"✦ AI 整理成公文格式"}</button></>}
+      {item.mode==="decision"&&<div style={{fontSize:11,color:"#999",fontStyle:"italic"}}>顯示為「依決議辦理。」</div>}
+    </>}
+  </div>;
+}
+
+function ProposalCard({prop,index,onChange,onRemove}) {
+  const col=SC[prop.section]||C.gold;
+  return <div style={{...S.ibox,borderLeft:`3px solid ${col}`,position:"relative"}}>
+    <button onClick={onRemove} style={{position:"absolute",top:8,right:10,background:"transparent",border:"none",cursor:"pointer",fontSize:16,color:"#bbb"}}>✕</button>
+    <div style={{paddingRight:24,marginBottom:8}}><span style={S.tag(col)}>{prop.section}</span><strong style={{fontSize:13}}>{prop.caseTitle}</strong><span style={{fontSize:11,color:C.muted,marginLeft:6}}>提案人：{prop.proposer}</span></div>
+    <div style={{display:"flex",alignItems:"center",gap:14,marginBottom:8,flexWrap:"wrap"}}>
+      <span style={{fontSize:11,color:C.muted}}>放置於：</span>
+      {["討論事項","報告事項","臨時動議"].map(s=>(
+        <label key={s} style={{display:"flex",alignItems:"center",gap:4,cursor:"pointer",fontSize:12}}>
+          <input type="radio" name={`sec-${prop.id}`} checked={prop.section===s} onChange={()=>onChange(index,{...prop,section:s})}/> <span style={{color:SC[s]}}>{s}</span>
+        </label>
+      ))}
+    </div>
+    <div style={{fontSize:12,color:"#444",padding:"6px 10px",background:"#f0ead6",borderRadius:1,lineHeight:1.8,whiteSpace:"pre-wrap"}}>{prop.description}</div>
+    <label style={{display:"flex",alignItems:"center",gap:5,cursor:"pointer",fontSize:12,marginTop:8}}>
+      <input type="checkbox" checked={prop.include} onChange={e=>onChange(index,{...prop,include:e.target.checked})}/> 納入議程
+    </label>
+  </div>;
+}
+
+function AgendaForm({info,onChange}) {
+  const F=({label,k,flex,ph})=><div style={{flex:flex||1}}>
+    <div style={S.lbl}>{label}</div>
+    <input style={S.inp} value={info[k]} placeholder={ph} onChange={e=>onChange({...info,[k]:e.target.value})}/>
+  </div>;
+  return <div style={S.cb}>
+    <div style={S.row}><F label="機構名稱" k="org" flex={2}/><F label="副標題" k="subtitle" flex={2}/></div>
+    <div style={{...S.row,marginTop:10}}><F label="第幾次會議" k="meetingNo" ph="第十八次"/><F label="會議主題" k="theme" flex={2} ph="統整近期工作進度與後續執行方向"/></div>
+    <div style={{...S.row,marginTop:10}}><F label="日期（民國）" k="date" ph="115年04月02日"/><F label="星期" k="weekday" ph="三"/><F label="時間" k="time" ph="14：00"/></div>
+    <div style={{...S.row,marginTop:10}}><F label="地點" k="location" flex={2}/><F label="主席" k="chair"/></div>
+    <div style={{marginTop:10}}><div style={S.lbl}>統計截止日期（顯示於表格標題）</div><input style={{...S.inp,maxWidth:280}} value={info.dataDate||""} placeholder="例：3/19 健康處方管理系統" onChange={e=>onChange({...info,dataDate:e.target.value})}/></div>
+  </div>;
+}
+
+// Default clinics
+const DEFAULT_CLINICS=[
+  {id:"c01",group:"自有營養師",name:"王永良診所",teachTime:"2/5(四)10:00",eSig:true,nutrition:true,coupon:true,consultation:true,openCount:26,execCount:4,note:"每兩個月一次的週五下午 營養師：邱淑娟"},
+  {id:"c02",group:"自有營養師",name:"榮陽安心診所",teachTime:"2/6(五)10:00",eSig:true,nutrition:true,coupon:true,consultation:true,openCount:37,execCount:4,note:"每週三四五上午 營養師：蔡佳樺"},
+  {id:"c03",group:"自有營養師",name:"王志靈內科診所",teachTime:"2/10(二)11:00",eSig:true,nutrition:true,coupon:true,consultation:true,openCount:20,execCount:1,note:"待完成職登"},
+  {id:"c04",group:"已媒合",name:"洪耳鼻喉科診所",teachTime:"-",eSig:false,nutrition:true,coupon:true,consultation:true,openCount:691,execCount:253,note:"每週六上午 營養師：石偊靖"},
+  {id:"c05",group:"已媒合",name:"永安家庭醫學科診所",teachTime:"2/5(四)13:00",eSig:true,nutrition:true,coupon:true,consultation:true,openCount:72,execCount:8,note:"每週四下午 營養師：邱詩芸"},
+  {id:"c06",group:"已媒合",name:"石牌鄭身心醫學診所",teachTime:"2/6(五)11:00",eSig:true,nutrition:true,coupon:true,consultation:true,openCount:76,execCount:7,note:"每個月第一週的週四上午 營養師：官彧"},
+  {id:"c07",group:"已媒合",name:"蔡秉勳小兒科診所",teachTime:"2/11(三)13:00",eSig:true,nutrition:true,coupon:true,consultation:true,openCount:296,execCount:2,note:"每個月第三週的週四上午 營養師：官彧"},
+  {id:"c08",group:"已媒合",name:"翰譽診所",teachTime:"2/12(四)14:00",eSig:true,nutrition:true,coupon:true,consultation:true,openCount:48,execCount:14,note:"4/15上午9點至12點首次駐點 營養師：官彧"},
+  {id:"c09",group:"已媒合",name:"台北欣安耳鼻喉科",teachTime:"2/5(四)14:00",eSig:true,nutrition:true,coupon:false,consultation:true,openCount:44,execCount:0,note:"3/25上午9點至11點首次駐點 營養師：官彧"},
+  {id:"c10",group:"有空間待媒合",name:"何叔芳小兒科診所",teachTime:"2/11(三)14:00",eSig:true,nutrition:true,coupon:true,consultation:true,openCount:36,execCount:6,note:"待安排"},
+  {id:"c11",group:"有空間待媒合",name:"清田婦產科家醫科診所",teachTime:"3/4(三)15:00",eSig:true,nutrition:true,coupon:true,consultation:true,openCount:12,execCount:0,note:"待收案數增加再媒合"},
+  {id:"c12",group:"有空間待媒合",name:"洪志淳皮膚科診所",teachTime:"3/5(四)13:00",eSig:true,nutrition:true,coupon:true,consultation:true,openCount:20,execCount:0,note:"可安排週一上午"},
+  {id:"c13",group:"無空間",name:"陳獻明小兒科",teachTime:"2/6(五)13:00",eSig:true,nutrition:true,coupon:true,consultation:true,openCount:32,execCount:0,note:"無空間"},
+  {id:"c14",group:"無空間",name:"杏華診所",teachTime:"2/9(一)10:00",eSig:true,nutrition:true,coupon:true,consultation:true,openCount:32,execCount:0,note:"無空間"},
+  {id:"c15",group:"無空間",name:"慧捷診所",teachTime:"2/10(二)14:00",eSig:true,nutrition:true,coupon:true,consultation:true,openCount:0,execCount:0,note:"無空間"},
+  {id:"c16",group:"無空間",name:"昱德聯合診所",teachTime:"3/4(三)15:00",eSig:true,nutrition:true,coupon:true,consultation:true,openCount:24,execCount:6,note:"無空間"},
+  {id:"c17",group:"無空間",name:"臻心復健科診所",teachTime:"3/5(四)15:00",eSig:true,nutrition:true,coupon:true,consultation:true,openCount:16,execCount:0,note:"無空間"},
+];
+
+function buildWordHTML(info, prescStats, clinics, tracked, proposals) {
+  const bySection=s=>proposals.filter(p=>p.include&&p.section===s);
+  const GROUPS=["自有營養師","已媒合","有空間待媒合","無空間"];
+  const diff=(cur,prev)=>{if(prev===undefined||prev===null||prev==="")return"";const c=typeof cur==="string"?parseFloat(cur):cur,p=typeof prev==="string"?parseFloat(prev):prev;if(isNaN(c)||isNaN(p))return"";const d=c-p;return d===0?"0":d>0?`+${typeof cur==="string"&&cur.includes("%")?d.toFixed(1)+"%":d}`:`${typeof cur==="string"&&cur.includes("%")?d.toFixed(1)+"%":d}`;};
+  const presRows=prescStats?[...["運動處方","營養處方","社會處方","情緒調適處方"].map(k=>{const r=prescStats.rows.find(x=>x.label===k)||{open:0,exec:0,rate:"0%",prevOpen:0,prevExec:0,prevRate:"0%"};return{label:k,...r};}),{label:"total",isTotal:true,...prescStats.total}]:[];
+  const prescHTML=prescStats?`<table class="data-table"><tr class="hdr-row"><th rowspan="2" style="width:18%">健康處方類別</th><th colspan="3">處方數</th><th colspan="3">已執行處方數</th><th colspan="3">處方執行率</th></tr><tr class="hdr-row"><th>本週</th><th>上週</th><th>差異</th><th>本週</th><th>上週</th><th>差異</th><th>本週</th><th>上週</th><th>差異</th></tr>${presRows.map(r=>`<tr${r.isTotal?' class="total-row"':''}><td>${r.isTotal?"處方開立總數(各處方加總)":r.label}</td><td class="num">${r.open}</td><td class="num">${r.prevOpen||0}</td><td class="num">${diff(r.open,r.prevOpen||0)}</td><td class="num">${r.exec}</td><td class="num">${r.prevExec||0}</td><td class="num">${diff(r.exec,r.prevExec||0)}</td><td class="num">${r.rate}</td><td class="num">${r.prevRate||"0%"}</td><td class="num">${diff(r.rate,r.prevRate||"0%")}</td></tr>`).join("")}</table>`:"<p>（尚未上傳處方資料）</p>";
+  const clinicHTML=clinics.length>0?`<table class="data-table"><tr class="hdr-row"><th rowspan="2">分類</th><th rowspan="2">診所名稱</th><th rowspan="2" style="font-size:9pt">預計實地<br>教學時間</th><th rowspan="2" style="font-size:9pt">電子<br>簽章</th><th rowspan="2" style="font-size:9pt">營養<br>空間</th><th rowspan="2" style="font-size:9pt">禮券</th><th colspan="3" style="font-size:9pt">處方數量</th><th rowspan="2">備註</th></tr><tr class="hdr-row"><th style="font-size:9pt">開立</th><th style="font-size:9pt">執行</th><th style="font-size:9pt">營養諮詢</th></tr>${GROUPS.map(grp=>{const items=clinics.filter(c=>c.group===grp);if(!items.length)return"";return items.map((c,i)=>`<tr>${i===0?`<td rowspan="${items.length}" class="grp-cell">${grp}</td>`:""}<td>${c.name}</td><td class="num">${c.teachTime}</td><td class="num">${c.eSig?"V":""}</td><td class="num">${c.nutrition?"V":""}</td><td class="num">${c.coupon?"V":""}</td><td class="num bold">${c.openCount}</td><td class="num bold">${c.execCount}</td><td class="num">${c.consultation?"V":""}</td><td style="font-size:9pt">${c.note||""}</td></tr>`).join("");}).join("")}</table>`:"<p>（尚未設定診所資料）</p>";
+  const trackBlock=tracked.length===0?"<p class='i1'>（本次無列管追蹤事項）</p>":tracked.map(item=>`<div class='track'><p><b>【${item.source}】</b>案由：${item.caseTitle}</p><p>決議事項：${item.content}${item.status?`<br>上次辦理情形：${item.status}`:""}</p><p><b>本次辦理情形：</b>${item.mode==="decision"?"依決議辦理。":(item.customText?.trim()||"（待填寫）")}</p></div>`).join("");
+  const propBlock=(items,isD)=>items.map((p,i)=>`<div class='proposal'><p>第${cnums[i]||i+1}案　提案人：${p.proposer}</p><p>案由：${p.caseTitle}</p><table class='dt'><tbody><tr><td class='dl'>說　明：</td><td>${(p.description||"").replace(/\n/g,"<br>")}</td></tr>${isD?"<tr><td class='dl'>決　議：</td><td>&nbsp;<br>&nbsp;</td></tr>":""}</tbody></table></div>`).join("");
+  const rpt=bySection("報告事項"),dis=bySection("討論事項"),urg=bySection("臨時動議");
+  return `<!DOCTYPE html><html lang="zh-TW"><head><meta charset="UTF-8"><style>@page{size:A4;margin:2cm 2.5cm}body{font-family:"標楷體","DFKai-SB",serif;font-size:11pt;line-height:2;color:#000;margin:0}h1{font-size:13pt;text-align:center;font-weight:bold;margin:0;line-height:2.2}h2{font-size:12pt;font-weight:bold;margin:12pt 0 2pt}h3{font-size:11pt;font-weight:bold;margin:8pt 0 2pt;margin-left:1em}p{margin:1pt 0}.ctr{text-align:center;font-size:10pt}hr{border:none;border-top:2px solid #000;margin:8pt 0}.i1{margin-left:2em}.track{border:1px solid #aaa;padding:5pt 8pt;margin:6pt 0}.track p{margin:1pt 0;font-size:10pt;line-height:1.9}.proposal{margin:8pt 0 8pt 1em}.proposal p{margin:1pt 0}.dt{width:100%;border:none;border-collapse:collapse}.dt td{border:none;vertical-align:top;padding:1pt 3pt;font-size:10pt;line-height:1.9}.dl{white-space:nowrap;font-weight:bold;width:5em}.data-table{width:100%;border-collapse:collapse;font-size:9pt;margin:6pt 0}.data-table td,.data-table th{border:1px solid #888;padding:3pt 5pt;vertical-align:middle}.hdr-row th{background:#2c2416;color:#e8dfc8;text-align:center;font-weight:bold}.total-row{background:#f5f0e8;font-weight:bold}.grp-cell{text-align:center;font-weight:bold;background:#f5f0e8;font-size:9pt}.num{text-align:center}.bold{font-weight:bold}</style></head><body>
+<h1>${info.org}</h1><h1>${info.subtitle}</h1><h1>${info.meetingNo}內部工作會議${info.theme?`：${info.theme}`:""}　會議議程</h1>
+<p class="ctr">時間：${info.date}（星期${info.weekday}）${info.time}</p><p class="ctr">地點：${info.location}</p><p class="ctr">主席：${info.chair}</p><hr/>
+<h2>壹、主席致詞</h2>
+<h2>貳、計畫推動現況</h2>
+<h3>一、現行健康處方開立及執行情形${info.dataDate?`（截至 ${info.dataDate}）`:""}</h3>${prescHTML}
+<h3>二、目前診所拓點現況${info.dataDate?`（截至 ${info.dataDate}）`:""}</h3>${clinicHTML}
+<h3>三、目前課程開設現況</h3><h3>四、本月份健康處方課程表</h3><h3>五、處方活動日課程表</h3><h3>六、曾參與說明會但未開課教師名單</h3><h3>七、潛在場地列表</h3><h3>八、潛在課程及師資列表</h3><h3>九、未成功開課及可直接開課之課程列表</h3>
+<h2>參、確認歷次健康台灣深耕計畫會議紀錄暨決議辦理情形</h2>${trackBlock}
+<h2>肆、報告事項</h2><p class="i1">一、請各位同仁報告上週工作內容及未來一週工作規劃，報告內容如下表：</p>${rpt.length>0?propBlock(rpt,false):""}<p class="i1">二、重要會議及活動時程</p><p class="i1">三、拜會處方執行相關單位時程</p>
+<h2>伍、討論事項</h2>${dis.length===0?"<p class='i1'>（無）</p>":propBlock(dis,true)}
+<h2>陸、臨時動議</h2>${urg.length===0?"<p class='i1'>（無）</p>":propBlock(urg,true)}
+<h2>柒、散會</h2></body></html>`;
+}
+
+const STEPS=["上傳紀錄","議程資訊","計畫現況","列管事項","提案整合","預覽下載"];
+
+function App() {
+  const [step,setStep]=useState(0);
+  const [view,setView]=useState("main");
+  const [loading,setLoading]=useState("");
+  const [err,setErr]=useState("");
+  const [minutesName,setMinutesName]=useState("");
+  const [excelName,setExcelName]=useState("");
+  const [generated,setGenerated]=useState(false);
+  const [archives,setArchives]=useState([]);
+  const [archiveLoading,setArchiveLoading]=useState(false);
+  const [info,setInfo]=useState({org:"台北市醫師公會「健康台灣深耕計畫」",subtitle:"臺北市慢性病防治全人健康智慧整合照護計畫",meetingNo:"第十八次",theme:"統整近期工作進度與後續執行方向",date:"",weekday:"",time:"14：00",location:"",chair:"健康台灣深耕計畫 蔡蕙芳執行長",dataDate:""});
+  const [prescStats,setPrescStats]=useState(null);
+  const [excelRows,setExcelRows]=useState(null);
+  const [cutoffThis,setCutoffThis]=useState("");
+  const [cutoffLast,setCutoffLast]=useState("");
+  const [clinics,setClinics]=useState(DEFAULT_CLINICS);
+  const [managed,setManaged]=useState([]);
+  const [suggested,setSuggested]=useState([]);
+  const [proposals,setProposals]=useState([]);
+  const minutesRef=useRef(), excelRef=useRef(), proposalRef=useRef();
+
+  const updateManaged=(i,v)=>setManaged(a=>{const n=[...a];n[i]=v;return n;});
+  const updateSuggested=(i,v)=>setSuggested(a=>{const n=[...a];n[i]=v;return n;});
+  const updateProposal=(i,v)=>setProposals(a=>{const n=[...a];n[i]=v;return n;});
+  const removeProposal=(i)=>setProposals(a=>a.filter((_,j)=>j!==i));
+  const updateClinic=(id,field,value)=>setClinics(a=>a.map(c=>c.id===id?{...c,[field]:value}:c));
+
+  const recalcStats=useCallback((rows,cThis,cLast)=>{
+    const stats=computeStats(rows,cThis||null,cLast||null);
+    const clinicMap={};
+    const cutoffDate=cThis?new Date(cThis):null;
+    for(let i=1;i<rows.length;i++){const r=rows[i];const cn=r[7];const ex=r[14];const od=parseDate(r[21]);if(!cn)continue;if(cutoffDate&&od&&od>cutoffDate)continue;if(!clinicMap[cn])clinicMap[cn]={open:0,exec:0};clinicMap[cn].open++;if(ex==="V"||ex==="v"||ex===true)clinicMap[cn].exec++;}
+    setClinics(prev=>prev.map(c=>{const key=Object.keys(clinicMap).find(k=>k.includes(c.name.slice(0,4))||c.name.includes(k.slice(0,4)));if(key)return{...c,openCount:clinicMap[key].open,execCount:clinicMap[key].exec};return c;}));
+    setPrescStats(stats);
+  },[]);
+
+  useEffect(()=>{ if(excelRows) recalcStats(excelRows,cutoffThis,cutoffLast); },[cutoffThis,cutoffLast]);
+
+  const handleMinutes=async(file)=>{
+    if(!file)return;setErr("");setLoading("解析會議紀錄…");
+    try{const data=await extractMinutes(file);setManaged((data?.managedItems||[]).filter(i=>i.isManaged).map(i=>({...i,include:true,mode:"decision",customText:""})));setSuggested((data?.newItems||[]).filter(i=>i.needsManagement).map(i=>({...i,include:true,mode:"decision",customText:""})));setMinutesName(file.name);setStep(1);}
+    catch(e){setErr("解析失敗："+e.message);}setLoading("");
+  };
+  const handleExcel=async(file)=>{
+    if(!file)return;setErr("");setLoading("讀取 Excel 資料…");
+    try{const rows=await parseExcel(file);setExcelRows(rows);setExcelName(file.name);let maxDate=null;for(let i=1;i<rows.length;i++){const d=parseDate(rows[i][21]);if(d&&(!maxDate||d>maxDate))maxDate=d;}let isoThis="",isoLast="";if(maxDate){isoThis=`${maxDate.getFullYear()}-${String(maxDate.getMonth()+1).padStart(2,"0")}-${String(maxDate.getDate()).padStart(2,"0")}`;const prev=new Date(maxDate);prev.setDate(prev.getDate()-7);isoLast=`${prev.getFullYear()}-${String(prev.getMonth()+1).padStart(2,"0")}-${String(prev.getDate()).padStart(2,"0")}`;setCutoffThis(isoThis);setCutoffLast(isoLast);}recalcStats(rows,isoThis||null,isoLast||null);}
+    catch(e){setErr("Excel 解析失敗："+e.message);}setLoading("");
+  };
+  const handleProposal=async(file)=>{
+    if(!file)return;setErr("");setLoading(`解析提案單「${file.name}」…`);
+    try{const items=await extractProposal(file);const annotated=items.map(i=>({...i,section:i.suggestedSection||"討論事項",include:true,id:i.id||`p${Date.now()}${Math.random().toString(36).slice(2)}`}));setProposals(prev=>[...prev,...annotated]);}
+    catch(e){setErr("提案單解析失敗："+e.message);}setLoading("");
+  };
+
+  const handleGenerate=async()=>{
+    const tracked=[...managed.filter(i=>i.include),...suggested.filter(i=>i.include)];
+    const html=buildWordHTML(info,prescStats,clinics,tracked,proposals);
+    const blob=new Blob(["\ufeff"+html],{type:"application/msword;charset=utf-8"});
+    const url=URL.createObjectURL(blob);const a=document.createElement("a");a.href=url;a.download=`${info.meetingNo}內部工作會議議程.doc`;a.click();URL.revokeObjectURL(url);
+    try{const record={id:`agenda_${Date.now()}`,title:`${info.meetingNo}內部工作會議`,date:info.date,createdAt:new Date().toISOString(),info,tracked,proposals:proposals.filter(p=>p.include),hasPrescStats:!!prescStats};await saveArchive(record);}catch(e){console.warn("存檔失敗",e);}
+    setGenerated(true);
+  };
+
+  const Dot=({n})=><div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:3}}>
+    <div style={{width:26,height:26,borderRadius:"50%",background:step>=n?C.ink:C.border,color:step>=n?"#e8dfc8":"#9a8660",display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:700}}>{n+1}</div>
+    <span style={{fontSize:10,color:step>=n?C.ink:"#9a8660",whiteSpace:"nowrap"}}>{STEPS[n]}</span>
+  </div>;
+
+  return (
+    <div style={{fontFamily:"'Noto Serif TC',STSong,serif",background:C.bg,minHeight:"100vh",color:C.ink}}>
+      <div style={{background:C.ink,color:"#e8dfc8",padding:"22px 36px 16px",borderBottom:`3px solid ${C.gold}`}}>
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+          <div><div style={{fontSize:19,fontWeight:700,letterSpacing:".12em"}}>會議議程製作系統</div><div style={{fontSize:11,marginTop:3,opacity:.65}}>健康台灣深耕計畫　內部工作會議</div></div>
+          <button style={{...S.btnO,fontSize:12,padding:"6px 14px",color:"#e8dfc8",borderColor:"rgba(255,255,255,0.3)"}}
+            onClick={async()=>{if(view==="archive"){setView("main");return;}setArchiveLoading(true);try{const idx=await loadArchiveIndex();setArchives(Array.isArray(idx)?idx:[]);}catch{setArchives([]);}setArchiveLoading(false);setView("archive");}}>
+            {view==="archive"?"← 返回製作":"📁 歷次存檔"}
+          </button>
+        </div>
+      </div>
+
+      <div style={{maxWidth:960,margin:"0 auto",padding:"24px 18px"}}>
+        {view==="archive" && (
+          <div>
+            <div style={{fontSize:16,fontWeight:700,marginBottom:16}}>📁 歷次議程存檔</div>
+            {archiveLoading&&<div style={S.prog}>⏳ 載入中…</div>}
+            {!archiveLoading&&archives.length===0&&<div style={{color:C.muted,textAlign:"center",padding:32,fontSize:14}}>尚未有任何存檔紀錄。</div>}
+            {!archiveLoading&&archives.map(a=>(
+              <div key={a.id} style={{...S.card,padding:0,overflow:"hidden"}}>
+                <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"12px 18px"}}>
+                  <div><div style={{fontWeight:700,fontSize:14}}>{a.title}</div><div style={{fontSize:12,color:C.muted,marginTop:2}}>會議日期：{a.date}　存檔：{new Date(a.createdAt).toLocaleString("zh-TW")}</div></div>
+                  <button style={S.btnS()} onClick={async()=>{try{const record=await loadArchiveRecord(a.id);if(!record)return alert("找不到存檔資料");const html=buildWordHTML(record.info,null,DEFAULT_CLINICS,record.tracked||[],record.proposals||[]);const blob=new Blob(["\ufeff"+html],{type:"application/msword;charset=utf-8"});const url=URL.createObjectURL(blob);const el=document.createElement("a");el.href=url;el.download=`${record.title}議程（存檔）.doc`;el.click();URL.revokeObjectURL(url);}catch(e){alert("下載失敗："+e.message);}}}>⬇ 下載</button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {view==="main" && (<>
+          <div style={{display:"flex",alignItems:"center",marginBottom:24}}>
+            {STEPS.map((_,n)=>(
+              <div key={n} style={{display:"flex",alignItems:"center",flex:n<STEPS.length-1?1:"none"}}>
+                <Dot n={n}/>
+                {n<STEPS.length-1&&<div style={{height:2,flex:1,background:step>n?C.ink:C.border,margin:"0 3px",marginBottom:14}}/>}
+              </div>
+            ))}
+          </div>
+
+          {loading&&<div style={S.prog}>⏳ {loading}</div>}
+          {err&&<div style={S.err}>⚠ {err}</div>}
+
+          {/* S0 */}
+          {step===0&&<div style={S.card}><div style={S.ch()}>步驟一　上傳前次會議紀錄</div><div style={S.cb}><UploadZone onFile={handleMinutes} fileRef={minutesRef} label="拖曳或點擊上傳會議紀錄" sub="支援 PDF、Word (.docx)"/>{minutesName&&<div style={{fontSize:12,color:C.muted,marginTop:8}}>✓ 已載入：{minutesName}</div>}</div></div>}
+
+          {/* S1 */}
+          {step===1&&<div style={S.card}><div style={S.ch()}>步驟二　設定本次會議基本資訊</div><AgendaForm info={info} onChange={setInfo}/><div style={{padding:"0 18px 18px",display:"flex",gap:10}}><button style={S.btnO} onClick={()=>setStep(0)}>← 上一步</button><button style={S.btn} onClick={()=>setStep(2)}>下一步 →</button></div></div>}
+
+          {/* S2 */}
+          {step===2&&<>
+            <div style={S.card}><div style={S.ch("#2e5d2e")}>步驟三　計畫推動現況</div><div style={S.cb}>
+              <div style={{...S.lbl,fontSize:13,marginBottom:10}}>① 上傳處方資料 Excel</div>
+              <UploadZone onFile={handleExcel} fileRef={excelRef} label="上傳處方紀錄 Excel" sub="上傳後自動計算各類處方統計" accept=".xlsx,.xls"/>
+              {excelName&&<div style={{fontSize:12,color:C.muted,marginTop:6}}>✓ 已載入：{excelName}</div>}
+              {excelRows&&<div style={{marginTop:16}}>
+                <div style={{...S.row,gap:20,marginBottom:14,flexWrap:"wrap"}}>
+                  <div><div style={S.lbl}>本週截止日</div><input type="date" style={{...S.inp,maxWidth:180}} value={cutoffThis} onChange={e=>setCutoffThis(e.target.value)}/><div style={{fontSize:11,color:C.muted,marginTop:3}}>計算截至此日的累計數</div></div>
+                  <div><div style={S.lbl}>上週截止日</div><input type="date" style={{...S.inp,maxWidth:180}} value={cutoffLast} onChange={e=>setCutoffLast(e.target.value)}/><div style={{fontSize:11,color:C.muted,marginTop:3}}>計算截至此日的累計數</div></div>
+                </div>
+                {prescStats&&<><div style={{...S.lbl,fontSize:12,marginBottom:8}}>處方統計預覽</div>
+                  <div style={{overflowX:"auto"}}>
+                    <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+                      <thead>
+                        <tr><th rowSpan={2} style={{background:C.ink,color:"#e8dfc8",padding:"5px 8px",border:"1px solid #555",width:"20%"}}>處方類別</th><th colSpan={3} style={{background:C.ink,color:"#e8dfc8",padding:"5px 8px",border:"1px solid #555"}}>處方數</th><th colSpan={3} style={{background:C.ink,color:"#e8dfc8",padding:"5px 8px",border:"1px solid #555"}}>已執行</th><th colSpan={3} style={{background:C.ink,color:"#e8dfc8",padding:"5px 8px",border:"1px solid #555"}}>執行率</th></tr>
+                        <tr>{["本週","上週","差異","本週","上週","差異","本週","上週","差異"].map((h,i)=><th key={i} style={{background:C.ink,color:"#e8dfc8",padding:"4px 6px",border:"1px solid #555",fontSize:10,textAlign:"center"}}>{h}</th>)}</tr>
+                      </thead>
+                      <tbody>
+                        {[...prescStats.rows,{label:"處方開立總數(各處方加總)",isTotal:true,...prescStats.total}].map((r,i)=>{
+                          const dO=r.open-(r.prevOpen||0),dE=r.exec-(r.prevExec||0),dR=parseFloat(r.rate)-(parseFloat(r.prevRate||"0"));
+                          const fmt=(d,isR)=>d===0?"0":d>0?`+${isR?d.toFixed(1)+"%":d}`:`${isR?d.toFixed(1)+"%":d}`;
+                          const dc=(v)=>typeof v==="string"&&v.startsWith("+")?"#2e7d32":v==="0"||v==="0%"?"#555":"#c62828";
+                          return <tr key={i} style={{background:r.isTotal?"#f5f0e8":"white",fontWeight:r.isTotal?700:400}}>
+                            <td style={{padding:"3px 8px",border:`1px solid ${C.border}`,fontSize:11}}>{r.label}</td>
+                            {[r.open,r.prevOpen||0,fmt(dO,false),r.exec,r.prevExec||0,fmt(dE,false),r.rate,r.prevRate||"0%",fmt(dR,true)].map((v,j)=>(
+                              <td key={j} style={{padding:"3px 6px",textAlign:"center",border:`1px solid ${C.border}`,fontSize:11,color:[2,5,8].includes(j)?dc(String(v)):"inherit"}}>{v}</td>
+                            ))}
+                          </tr>;
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </>}
+            </div>}</div></div>
+            <div style={S.card}><div style={S.ch("#2e5d2e")}>② 診所拓點現況</div><div style={S.cb}><div style={{overflowX:"auto"}}>
+              <table style={{width:"100%",borderCollapse:"collapse",fontSize:12,minWidth:700}}>
+                <thead>
+                  <tr><th rowSpan={2} style={{background:C.ink,color:"#e8dfc8",padding:"5px 8px",border:"1px solid #555",width:"6%"}}>分類</th><th rowSpan={2} style={{background:C.ink,color:"#e8dfc8",padding:"5px 8px",border:"1px solid #555"}}>診所名稱</th><th rowSpan={2} style={{background:C.ink,color:"#e8dfc8",padding:"5px 8px",border:"1px solid #555",fontSize:10}}>預計教學時間</th><th colSpan={4} style={{background:C.ink,color:"#e8dfc8",padding:"5px 8px",border:"1px solid #555",fontSize:10,textAlign:"center"}}>設置情形</th><th colSpan={2} style={{background:C.ink,color:"#e8dfc8",padding:"5px 8px",border:"1px solid #555",textAlign:"center"}}>處方數量</th><th rowSpan={2} style={{background:C.ink,color:"#e8dfc8",padding:"5px 8px",border:"1px solid #555"}}>備註</th></tr>
+                  <tr>{["電子簽章","營養空間","禮券","營養諮詢","開立","執行"].map(h=><th key={h} style={{background:C.ink,color:"#e8dfc8",padding:"4px 6px",border:"1px solid #555",fontSize:10,textAlign:"center"}}>{h}</th>)}</tr>
+                </thead>
+                <tbody>
+                  {["自有營養師","已媒合","有空間待媒合","無空間"].map(grp=>{const items=clinics.filter(c=>c.group===grp);if(!items.length)return null;return items.map((c,i)=>(
+                    <tr key={c.id}>
+                      {i===0&&<td rowSpan={items.length} style={{textAlign:"center",verticalAlign:"middle",background:"#f5f0e8",fontSize:11,fontWeight:700,border:`1px solid ${C.border}`,padding:"4px 6px"}}>{grp}</td>}
+                      <td style={{padding:"3px 8px",border:`1px solid ${C.border}`,fontSize:12}}>{c.name}</td>
+                      <td style={{padding:"3px 6px",textAlign:"center",border:`1px solid ${C.border}`,fontSize:11}}>{c.teachTime}</td>
+                      {["eSig","nutrition","coupon","consultation"].map(f=><td key={f} style={{textAlign:"center",border:`1px solid ${C.border}`,padding:"3px 6px"}}><input type="checkbox" checked={!!c[f]} onChange={e=>updateClinic(c.id,f,e.target.checked)}/></td>)}
+                      <td style={{textAlign:"center",fontWeight:700,color:C.blue,border:`1px solid ${C.border}`,padding:"3px 6px"}}>{c.openCount}</td>
+                      <td style={{textAlign:"center",fontWeight:700,color:C.green,border:`1px solid ${C.border}`,padding:"3px 6px"}}>{c.execCount}</td>
+                      <td style={{border:`1px solid ${C.border}`,padding:"3px 6px",fontSize:11}}><input style={{width:"100%",border:"1px solid #ddd",padding:"2px 4px",fontSize:11}} value={c.note} onChange={e=>updateClinic(c.id,"note",e.target.value)}/></td>
+                    </tr>
+                  ));})}
+                </tbody>
+              </table>
+            </div></div></div>
+            <div style={{display:"flex",gap:10}}><button style={S.btnO} onClick={()=>setStep(1)}>← 上一步</button><button style={S.btn} onClick={()=>setStep(3)}>下一步 →</button></div>
+          </>}
+
+          {/* S3 */}
+          {step===3&&<>
+            {managed.length>0&&<div style={S.card}><div style={S.ch()}>📌 繼續列管事項</div><div style={S.cb}>{managed.map((item,i)=><TrackedCard key={item.id||i} item={item} index={i} onChange={updateManaged}/>)}</div></div>}
+            {suggested.length>0&&<div style={S.card}><div style={S.ch("#2e5d9a")}>🔔 建議列管事項（AI 判斷）</div><div style={S.cb}>{suggested.map((item,i)=><TrackedCard key={item.id||i} item={item} index={i} onChange={updateSuggested}/>)}</div></div>}
+            {managed.length===0&&suggested.length===0&&<div style={S.card}><div style={S.cb}><div style={{color:C.muted,textAlign:"center",padding:14}}>未解析到需列管事項，可直接繼續。</div></div></div>}
+            <div style={{display:"flex",gap:10}}><button style={S.btnO} onClick={()=>setStep(2)}>← 上一步</button><button style={S.btn} onClick={()=>setStep(4)}>下一步：加入提案 →</button></div>
+          </>}
+
+          {/* S4 */}
+          {step===4&&<>
+            <div style={S.card}><div style={S.ch("#4a1a7a")}>📋 步驟五　提案整合</div><div style={S.cb}>
+              <div style={{background:"#f0eaf8",border:"1px solid #b39ddb",borderRadius:2,padding:"14px 16px",marginBottom:16}}>
+                <div style={{fontWeight:700,fontSize:13,color:"#4a1a7a",marginBottom:6}}>🔗 從提案收集平台載入</div>
+                <div style={{fontSize:12,color:C.muted,marginBottom:10}}>自動載入平台上狀態為「已納入」的提案</div>
+                <button style={S.btnS("#5d3a9a")} onClick={async()=>{
+                  try{const approved=await loadApprovedProposals();if(!approved.length){alert("平台上目前沒有標記為「已納入」的提案");return;}
+                  const annotated=approved.map(p=>({id:p.id,proposer:p.proposer,caseTitle:p.caseTitle,description:p.description,section:p.section||"討論事項",include:true}));
+                  const existingIds=new Set(proposals.map(x=>x.id));const newOnes=annotated.filter(x=>!existingIds.has(x.id));
+                  setProposals(prev=>[...prev,...newOnes]);alert(`已載入 ${newOnes.length} 筆提案`);}catch(e){alert("載入失敗："+e.message);}
+                }}>↓ 從平台載入已核可提案</button>
+              </div>
+              <div style={{...S.lbl,marginBottom:8}}>或手動上傳提案單</div>
+              <UploadZone onFile={handleProposal} fileRef={proposalRef} label="拖曳或點擊上傳提案單" sub="支援 PDF、Word (.docx)，可重複上傳多份"/>
+              <div style={{fontSize:12,color:C.muted,marginTop:8}}>✦ AI 解析後建議分類，可手動調整</div>
+            </div></div>
+            {proposals.length>0&&<div style={S.card}><div style={S.ch("#4a1a7a")}>已整合提案（{proposals.length} 項）</div><div style={S.cb}>{proposals.map((p,i)=><ProposalCard key={p.id||i} prop={p} index={i} onChange={updateProposal} onRemove={()=>removeProposal(i)}/>)}</div></div>}
+            <div style={{display:"flex",gap:10}}><button style={S.btnO} onClick={()=>setStep(3)}>← 上一步</button><button style={S.btn} onClick={()=>setStep(5)}>{proposals.length===0?"略過，直接產生議程 →":"下一步：產生議程 →"}</button></div>
+          </>}
+
+          {/* S5 */}
+          {step===5&&<div style={S.card}><div style={S.ch()}>步驟六　預覽議程並下載</div><div style={S.cb}>
+            <div style={{border:`2px solid ${C.border}`,borderRadius:2,overflow:"hidden",marginBottom:18}}>
+              <div style={{background:C.border,padding:"7px 14px",fontSize:12,color:C.muted,display:"flex",justifyContent:"space-between"}}>
+                <span>📄 議程預覽</span><span style={{fontSize:11}}>以下為實際輸出內容</span>
+              </div>
+              <div style={{padding:"24px 32px",background:"#fff",fontFamily:"'Noto Serif TC',STSong,serif",fontSize:13,lineHeight:2.1}}>
+                <div style={{textAlign:"center",fontWeight:700,fontSize:14}}>{info.org}</div>
+                <div style={{textAlign:"center",fontSize:12}}>{info.subtitle}</div>
+                <div style={{textAlign:"center",fontWeight:700,fontSize:14,marginBottom:4}}>{info.meetingNo}內部工作會議{info.theme?`：${info.theme}`:""}　會議議程</div>
+                <div style={{textAlign:"center",fontSize:12,color:C.muted}}>時間：{info.date}（星期{info.weekday}）{info.time}</div>
+                <div style={{textAlign:"center",fontSize:12,color:C.muted,marginBottom:8}}>地點：{info.location}　主席：{info.chair}</div>
+                <hr style={{borderTop:`1.5px solid ${C.ink}`,margin:"8px 0 12px"}}/>
+                <div style={{fontWeight:700,marginBottom:4}}>壹、主席致詞</div>
+                <div style={{fontWeight:700,marginBottom:4}}>貳、計畫推動現況</div>
+                {["一、現行健康處方開立及執行情形","二、目前診所拓點現況","三、目前課程開設現況","四、本月份健康處方課程表","五、處方活動日課程表","六、曾參與說明會但未開課教師名單","七、潛在場地列表","八、潛在課程及師資列表","九、未成功開課及可直接開課之課程列表"].map(s=><div key={s} style={{paddingLeft:"2em",fontSize:12}}>{s}</div>)}
+                <div style={{fontWeight:700,marginBottom:4,marginTop:8}}>參、確認歷次健康台灣深耕計畫會議紀錄暨決議辦理情形</div>
+                {[...managed.filter(i=>i.include),...suggested.filter(i=>i.include)].length===0
+                  ?<div style={{paddingLeft:"2em",fontSize:12,color:C.muted}}>（本次無列管追蹤事項）</div>
+                  :[...managed.filter(i=>i.include),...suggested.filter(i=>i.include)].map((item,j)=>(
+                  <div key={j} style={{margin:"6px 2em",padding:"8px 12px",border:`1px solid ${C.border}`,borderRadius:1,fontSize:12}}>
+                    <div><strong>【{item.source}】</strong>案由：{item.caseTitle}</div>
+                    <div><strong>本次辦理情形：</strong>{item.mode==="decision"?"依決議辦理。":(item.customText||"（待填寫）")}</div>
+                  </div>
+                ))}
+                {[["肆、報告事項","報告事項"],["伍、討論事項","討論事項"],["陸、臨時動議","臨時動議"]].map(([label,sec])=>(
+                  <div key={sec}>
+                    <div style={{fontWeight:700,marginBottom:4,marginTop:8}}>{label}</div>
+                    {proposals.filter(p=>p.include&&p.section===sec).length===0&&sec!=="肆、報告事項"&&<div style={{paddingLeft:"2em",fontSize:12,color:C.muted}}>（無）</div>}
+                    {proposals.filter(p=>p.include&&p.section===sec).map((p,j)=>(
+                      <div key={j} style={{margin:"4px 2em",padding:"6px 12px",border:`1px solid ${C.border}`,borderRadius:1,fontSize:12,borderLeft:`3px solid ${SC[sec]||C.gold}`}}>
+                        <div><strong>第{cnums[j]||j+1}案</strong>　提案人：{p.proposer}　案由：{p.caseTitle}</div>
+                        {sec==="討論事項"&&<div style={{marginTop:4,color:"#aaa"}}>決議：＿＿＿＿＿＿</div>}
+                      </div>
+                    ))}
+                  </div>
+                ))}
+                <div style={{fontWeight:700,marginTop:8}}>柒、散會</div>
+              </div>
+            </div>
+            {generated&&<div style={S.ok}>✓ 議程已下載並存檔！可在「歷次存檔」查閱。</div>}
+            <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
+              <button style={S.btnO} onClick={()=>setStep(4)}>← 返回修改</button>
+              <button style={S.btn} onClick={handleGenerate}>⬇ 下載議程 Word 檔</button>
+            </div>
+          </div></div>}
+        </>)}
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+</script>
+</body>
+</html>

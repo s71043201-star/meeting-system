@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>健康台灣深耕計畫｜會議系統</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Noto Serif TC', STSong, serif; background: #f4efe4; color: #1e1a12; min-height: 100vh; display: flex; align-items: center; justify-content: center; }
+  .wrap { max-width: 600px; width: 100%; padding: 40px 24px; }
+  .header { text-align: center; margin-bottom: 48px; }
+  .org { font-size: 13px; color: #7a6540; letter-spacing: .1em; margin-bottom: 8px; }
+  .title { font-size: 26px; font-weight: 700; letter-spacing: .08em; line-height: 1.4; }
+  .cards { display: flex; flex-direction: column; gap: 16px; }
+  .card { background: #fff; border: 1px solid #d4c49a; border-radius: 4px; padding: 24px 28px; text-decoration: none; color: inherit; box-shadow: 2px 2px 0 #d4c49a; display: flex; align-items: center; gap: 20px; transition: transform .15s, box-shadow .15s; }
+  .card:hover { transform: translateY(-2px); box-shadow: 4px 4px 0 #d4c49a; }
+  .icon { font-size: 36px; flex-shrink: 0; }
+  .card-title { font-size: 17px; font-weight: 700; margin-bottom: 4px; }
+  .card-desc { font-size: 13px; color: #7a6540; line-height: 1.6; }
+  .footer { text-align: center; margin-top: 40px; font-size: 11px; color: #9a8660; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="header">
+    <div class="org">台北市醫師公會</div>
+    <div class="title">健康台灣深耕計畫<br>內部工作會議系統</div>
+  </div>
+  <div class="cards">
+    <a href="proposal.html" class="card">
+      <div class="icon">📝</div>
+      <div>
+        <div class="card-title">提案收集平台</div>
+        <div class="card-desc">送出提案、查看提案狀態。管理員可審閱所有提案並標記處理結果、設定截止時間、管理與會人員名單。</div>
+      </div>
+    </a>
+    <a href="agenda.html" class="card">
+      <div class="icon">📋</div>
+      <div>
+        <div class="card-title">議程製作系統</div>
+        <div class="card-desc">上傳前次會議紀錄與處方 Excel，自動產生議程草稿、處方統計表、診所拓點表，並直接載入提案平台的核可提案。</div>
+      </div>
+    </a>
+  </div>
+  <div class="footer">本系統限內部使用　資料儲存於 Firebase 雲端</div>
+</div>
+</body>
+</html>

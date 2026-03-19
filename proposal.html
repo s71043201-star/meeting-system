@@ -1,0 +1,527 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>提案收集平台｜健康台灣深耕計畫</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"></script>
+<!-- Firebase -->
+<script type="module">
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+  import { getDatabase, ref, get, set } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-database.js";
+
+  const firebaseConfig = {
+    apiKey: "AIzaSyCrmUX0jyeXWgnbfVHVkxLN18ZwImx2hE4",
+    authDomain: "tpma-meating-create.firebaseapp.com",
+    databaseURL: "https://tpma-meating-create-default-rtdb.asia-southeast1.firebasedatabase.app",
+    projectId: "tpma-meating-create",
+    storageBucket: "tpma-meating-create.firebasestorage.app",
+    messagingSenderId: "667469548556",
+    appId: "1:667469548556:web:20ec75be9148cd70837229"
+  };
+
+  const app = initializeApp(firebaseConfig);
+  const db = getDatabase(app);
+
+  window.fbGet = async (key) => {
+    const snap = await get(ref(db, key));
+    return snap.exists() ? snap.val() : null;
+  };
+  window.fbSet = async (key, val) => {
+    await set(ref(db, key), val);
+  };
+  window.firebaseReady = true;
+  window.dispatchEvent(new Event("firebaseReady"));
+</script>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Noto Serif TC', STSong, serif; background: #f7f4ee; color: #1a1610; }
+  input, textarea, select, button { font-family: inherit; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script type="text/babel" data-presets="react">
+const { useState, useEffect, useRef, useCallback } = React;
+
+const ADMIN_PIN = "0000";
+const API = "https://api.anthropic.com/v1/messages";
+
+// ── Firebase helpers ──────────────────────────────────────────
+const waitFirebase = () => new Promise(res => {
+  if (window.firebaseReady) return res();
+  window.addEventListener("firebaseReady", res, { once: true });
+});
+
+async function fbLoad(key) {
+  await waitFirebase();
+  return window.fbGet(key);
+}
+async function fbSave(key, val) {
+  await waitFirebase();
+  return window.fbSet(key, val);
+}
+
+async function loadProposals() {
+  const v = await fbLoad("proposals/all"); return v ? Object.values(v) : [];
+}
+async function saveProposals(list) {
+  const obj = {};
+  list.forEach(p => { obj[p.id] = p; });
+  await fbSave("proposals/all", obj);
+}
+async function loadMembers() {
+  const v = await fbLoad("members/list"); return v || [];
+}
+async function saveMembers(list) { await fbSave("members/list", list); }
+async function loadDeadline() { const v = await fbLoad("proposals/deadline"); return v || ""; }
+async function saveDeadline(iso) { await fbSave("proposals/deadline", iso); }
+
+// ── Claude API ────────────────────────────────────────────────
+async function fileToBase64(file) {
+  return new Promise((res, rej) => {
+    const r = new FileReader();
+    r.onload = () => res(r.result.split(",")[1]);
+    r.onerror = rej;
+    r.readAsDataURL(file);
+  });
+}
+async function docxToText(file) {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = async (e) => {
+      try { const result = await window.mammoth.extractRawText({ arrayBuffer: e.target.result }); resolve(result.value); }
+      catch(err) { reject(err); }
+    };
+    r.onerror = reject;
+    r.readAsArrayBuffer(file);
+  });
+}
+async function parseProposalFile(file) {
+  const prompt = `請從這份提案單中擷取提案資訊，以 JSON 格式回傳，不要有其他文字：
+{"proposer":"提案人姓名職稱","caseTitle":"案由（不超過25字）","description":"說明欄完整內容","suggestedSection":"討論事項或報告事項或臨時動議"}`;
+  try {
+    if (file.name.toLowerCase().endsWith(".pdf")) {
+      const b64 = await fileToBase64(file);
+      const res = await fetch(API, { method:"POST", headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({ model:"claude-sonnet-4-20250514", max_tokens:1000,
+          messages:[{role:"user",content:[
+            {type:"document",source:{type:"base64",media_type:"application/pdf",data:b64}},
+            {type:"text",text:prompt}]}]})});
+      const d = await res.json();
+      return JSON.parse((d.content?.[0]?.text??"{}").replace(/```json\n?|```/g,"").trim());
+    } else {
+      const raw = await docxToText(file);
+      const res = await fetch(API, { method:"POST", headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({ model:"claude-sonnet-4-20250514", max_tokens:1000,
+          messages:[{role:"user",content:`${prompt}\n\n提案單內容：\n\n${raw}`}]})});
+      const d = await res.json();
+      return JSON.parse((d.content?.[0]?.text??"{}").replace(/```json\n?|```/g,"").trim());
+    }
+  } catch { return null; }
+}
+
+// ── Design tokens ─────────────────────────────────────────────
+const C = { bg:"#f7f4ee", surface:"#ffffff", ink:"#1a1610", gold:"#b5820a", muted:"#7a7060",
+  border:"#ddd5b8", green:"#1e6b3a", blue:"#1a4f8a", purple:"#5a2d82", red:"#b03a2e", cream:"#fdf9f0" };
+const SC = { "討論事項":C.blue, "報告事項":C.green, "臨時動議":C.purple };
+const STATUS_COLOR = { "待審閱":"#888", "已納入":C.green, "不納入":C.red, "需修改":C.gold };
+const STATUS_LABEL = ["待審閱","已納入","不納入","需修改"];
+
+const card = { background:C.surface, border:`1px solid ${C.border}`, borderRadius:4, boxShadow:"0 2px 8px rgba(0,0,0,0.07)" };
+
+function Badge({label,color}) {
+  return <span style={{display:"inline-block",background:color,color:"#fff",fontSize:11,padding:"2px 9px",borderRadius:12,marginRight:5}}>{label}</span>;
+}
+function Btn({children,onClick,variant="primary",disabled,style:ex}) {
+  const v = { primary:{background:C.ink,color:"#ede8d8",border:"none"},
+    secondary:{background:"transparent",color:C.ink,border:`1px solid ${C.ink}`},
+    gold:{background:C.gold,color:"#fff",border:"none"},
+    ghost:{background:"transparent",color:C.muted,border:`1px solid ${C.border}`} };
+  return <button onClick={onClick} disabled={disabled}
+    style={{padding:"8px 20px",fontSize:13,borderRadius:2,cursor:disabled?"not-allowed":"pointer",opacity:disabled?.5:1,...v[variant],...ex}}>{children}</button>;
+}
+function Inp({label,value,onChange,placeholder,type="text"}) {
+  return <div style={{marginBottom:12}}>
+    {label && <div style={{fontSize:11,color:C.muted,fontWeight:700,marginBottom:4}}>{label}</div>}
+    <input type={type} value={value} placeholder={placeholder} onChange={e=>onChange(e.target.value)}
+      style={{width:"100%",border:`1px solid ${C.border}`,padding:"8px 11px",fontSize:13,borderRadius:2,background:C.cream}}/>
+  </div>;
+}
+function Txtarea({label,value,onChange,placeholder,rows=5}) {
+  return <div style={{marginBottom:12}}>
+    {label && <div style={{fontSize:11,color:C.muted,fontWeight:700,marginBottom:4}}>{label}</div>}
+    <textarea value={value} placeholder={placeholder} rows={rows} onChange={e=>onChange(e.target.value)}
+      style={{width:"100%",border:`1px solid ${C.border}`,padding:"8px 11px",fontSize:13,borderRadius:2,background:C.cream,resize:"vertical"}}/>
+  </div>;
+}
+function Sel({label,value,onChange,options}) {
+  return <div style={{marginBottom:12}}>
+    {label && <div style={{fontSize:11,color:C.muted,fontWeight:700,marginBottom:4}}>{label}</div>}
+    <select value={value} onChange={e=>onChange(e.target.value)}
+      style={{width:"100%",border:`1px solid ${C.border}`,padding:"8px 11px",fontSize:13,borderRadius:2,background:C.cream}}>
+      {options.map(o=><option key={o} value={o}>{o}</option>)}
+    </select>
+  </div>;
+}
+
+function ProposalCard({p, onStatusChange, onDelete, isAdmin}) {
+  const [open, setOpen] = useState(false);
+  const col = SC[p.section]||C.gold;
+  const stCol = STATUS_COLOR[p.status]||"#888";
+  return (
+    <div style={{...card,marginBottom:12,overflow:"hidden"}}>
+      <div style={{display:"flex",alignItems:"center",gap:10,padding:"12px 16px",cursor:"pointer"}} onClick={()=>setOpen(x=>!x)}>
+        <div style={{flex:1,minWidth:0}}>
+          <div style={{marginBottom:4}}><Badge label={p.section} color={col}/><Badge label={p.status} color={stCol}/></div>
+          <div style={{fontWeight:700,fontSize:14,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{p.caseTitle}</div>
+          <div style={{fontSize:12,color:C.muted,marginTop:2}}>提案人：{p.proposer}　{new Date(p.createdAt).toLocaleDateString("zh-TW")}</div>
+        </div>
+        <span style={{color:C.muted,fontSize:16}}>{open?"▲":"▼"}</span>
+      </div>
+      {open && <div style={{padding:"0 16px 14px",borderTop:`1px solid ${C.border}`}}>
+        <div style={{fontSize:12,color:C.muted,margin:"10px 0 4px",fontWeight:700}}>說明：</div>
+        <div style={{fontSize:13,lineHeight:1.8,whiteSpace:"pre-wrap",background:C.cream,padding:"8px 12px",borderRadius:2,border:`1px solid ${C.border}`}}>{p.description||"（無說明）"}</div>
+        {isAdmin && <div style={{marginTop:12,display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
+          <span style={{fontSize:12,color:C.muted}}>標記狀態：</span>
+          {STATUS_LABEL.map(s=>(
+            <button key={s} onClick={()=>onStatusChange(p.id,s)}
+              style={{padding:"4px 12px",fontSize:12,cursor:"pointer",borderRadius:2,
+                border:`1px solid ${STATUS_COLOR[s]}`,
+                background:p.status===s?STATUS_COLOR[s]:"transparent",
+                color:p.status===s?"#fff":STATUS_COLOR[s]}}>{s}</button>
+          ))}
+          <button onClick={()=>onDelete(p.id)} style={{marginLeft:"auto",padding:"4px 12px",fontSize:12,cursor:"pointer",borderRadius:2,border:`1px solid ${C.border}`,background:"transparent",color:C.muted}}>刪除</button>
+        </div>}
+        {!isAdmin && <div style={{marginTop:10,fontSize:12,color:C.muted}}>狀態：<span style={{color:stCol,fontWeight:700}}>{p.status}</span></div>}
+      </div>}
+    </div>
+  );
+}
+
+function SubmitView({members, myName, onMyNameChange, onRefresh, deadline}) {
+  const isExpired = deadline && new Date() > new Date(deadline);
+  const [mode, setMode] = useState("form");
+  const [loading, setLoading] = useState("");
+  const [err, setErr] = useState("");
+  const [success, setSuccess] = useState(false);
+  const [proposer, setProposer] = useState(myName||"");
+  const [caseTitle, setCaseTitle] = useState("");
+  const [description, setDescription] = useState("");
+  const [section, setSection] = useState("討論事項");
+  const fileRef = useRef();
+
+  useEffect(()=>{ if(myName) setProposer(myName); },[myName]);
+
+  const resetForm = () => { setCaseTitle(""); setDescription(""); setSection("討論事項"); setSuccess(false); setErr(""); };
+
+  const handleSubmit = async () => {
+    if (!proposer.trim()) { setErr("請填寫提案人姓名"); return; }
+    if (!caseTitle.trim()) { setErr("請填寫案由"); return; }
+    setErr(""); setLoading("送出中…");
+    try {
+      const existing = await loadProposals();
+      const newP = { id:`p${Date.now()}${Math.random().toString(36).slice(2,6)}`, proposer:proposer.trim(),
+        caseTitle:caseTitle.trim(), description:description.trim(), section, status:"待審閱", createdAt:new Date().toISOString() };
+      await saveProposals([...existing, newP]);
+      onMyNameChange(proposer.trim()); setSuccess(true); resetForm(); onRefresh();
+    } catch(e) { setErr("送出失敗："+e.message); }
+    setLoading("");
+  };
+
+  const handleFile = async (file) => {
+    if (!file) return;
+    setErr(""); setLoading(`解析「${file.name}」…`);
+    try {
+      const parsed = await parseProposalFile(file);
+      if (!parsed) throw new Error("無法解析，請嘗試手動填寫");
+      if (parsed.proposer) setProposer(parsed.proposer);
+      if (parsed.caseTitle) setCaseTitle(parsed.caseTitle);
+      if (parsed.description) setDescription(parsed.description);
+      if (parsed.suggestedSection) setSection(parsed.suggestedSection);
+      setMode("form");
+    } catch(e) { setErr(e.message); }
+    setLoading("");
+  };
+
+  if (isExpired) return (
+    <div style={{textAlign:"center",padding:"40px 0"}}>
+      <div style={{fontSize:40,marginBottom:14}}>⛔</div>
+      <div style={{fontWeight:700,fontSize:16,color:C.red,marginBottom:8}}>提案收集已截止</div>
+      <div style={{fontSize:13,color:C.muted}}>本次會議提案收集已關閉，如有急事請直接聯繫主辦人員。</div>
+    </div>
+  );
+
+  return (
+    <div>
+      {success && <div style={{background:"#e8f5e9",border:"1px solid #66bb6a",borderRadius:3,padding:"12px 16px",marginBottom:16,fontSize:13,color:"#2e7d32"}}>✓ 提案已送出！管理員審閱後會更新狀態。</div>}
+      {members.length>0 && <div style={{marginBottom:16,padding:"12px 16px",background:C.cream,border:`1px solid ${C.border}`,borderRadius:3}}>
+        <div style={{fontSize:11,color:C.muted,fontWeight:700,marginBottom:8}}>你是誰？（選一個或直接輸入）</div>
+        <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+          {members.map(m=><button key={m} onClick={()=>{setProposer(m);onMyNameChange(m);}}
+            style={{padding:"5px 14px",fontSize:12,cursor:"pointer",borderRadius:20,border:`1px solid ${C.border}`,
+              background:proposer===m?C.ink:C.cream,color:proposer===m?"#ede8d8":C.ink}}>{m}</button>)}
+        </div>
+      </div>}
+      <div style={{display:"flex",gap:0,marginBottom:20,borderBottom:`2px solid ${C.border}`}}>
+        {[["form","✏️ 直接填寫"],["upload","📎 上傳檔案"]].map(([m,l])=>(
+          <button key={m} onClick={()=>setMode(m)}
+            style={{padding:"9px 20px",fontSize:13,cursor:"pointer",border:"none",
+              borderBottom:mode===m?`3px solid ${C.ink}`:"3px solid transparent",
+              background:"transparent",color:mode===m?C.ink:C.muted,fontWeight:mode===m?700:400,marginBottom:-2}}>{l}</button>
+        ))}
+      </div>
+      {mode==="upload" && <div>
+        <div style={{border:`2px dashed ${C.gold}`,borderRadius:3,padding:"36px 20px",textAlign:"center",cursor:"pointer",background:C.cream,marginBottom:12}}
+          onDragOver={e=>e.preventDefault()} onDrop={e=>{e.preventDefault();handleFile(e.dataTransfer.files[0]);}}
+          onClick={()=>fileRef.current?.click()}>
+          <div style={{fontSize:32,marginBottom:8}}>📄</div>
+          <div style={{fontWeight:700,marginBottom:4}}>拖曳或點擊上傳提案單</div>
+          <div style={{fontSize:12,color:C.muted}}>支援 PDF、Word (.docx)</div>
+          <input ref={fileRef} type="file" accept=".pdf,.docx" style={{display:"none"}} onChange={e=>{handleFile(e.target.files[0]);e.target.value="";}}/>
+        </div>
+        <div style={{fontSize:12,color:C.muted}}>✦ AI 解析後自動填入欄位，確認後再送出</div>
+      </div>}
+      {mode==="form" && <div>
+        <Inp label="提案人姓名 *" value={proposer} onChange={setProposer} placeholder="請輸入你的姓名"/>
+        <Inp label="案由 *" value={caseTitle} onChange={setCaseTitle} placeholder="簡潔說明提案主旨（不超過25字）"/>
+        <Txtarea label="說明" value={description} onChange={setDescription} placeholder="詳細說明提案內容、背景、預期效益等"/>
+        <Sel label="建議放置位置" value={section} onChange={setSection} options={["討論事項","報告事項","臨時動議"]}/>
+      </div>}
+      {err && <div style={{color:C.red,fontSize:13,marginBottom:8}}>⚠ {err}</div>}
+      {loading && <div style={{color:C.gold,fontSize:13,marginBottom:8}}>⏳ {loading}</div>}
+      {mode==="form" && <Btn onClick={handleSubmit} disabled={!!loading}>送出提案</Btn>}
+    </div>
+  );
+}
+
+function MyView({proposals, myName}) {
+  const mine = proposals.filter(p=>p.proposer===myName);
+  if (!myName) return <div style={{color:C.muted,textAlign:"center",padding:"32px 0",fontSize:14}}>請先在「送出提案」選擇你的名字</div>;
+  if (!mine.length) return <div style={{color:C.muted,textAlign:"center",padding:"32px 0",fontSize:14}}>你目前尚未有任何提案紀錄</div>;
+  return <div>{mine.sort((a,b)=>new Date(b.createdAt)-new Date(a.createdAt)).map(p=><ProposalCard key={p.id} p={p} isAdmin={false}/>)}</div>;
+}
+
+function AdminView({proposals, onStatusChange, onDelete, onRefresh}) {
+  const [members, setMembers] = useState([]);
+  const [newMember, setNewMember] = useState("");
+  const [filter, setFilter] = useState("全部");
+  const [secFilter, setSecFilter] = useState("全部");
+  const [saving, setSaving] = useState(false);
+  const [dlInput, setDlInput] = useState("");
+  const [dlSaved, setDlSaved] = useState(false);
+
+  useEffect(()=>{
+    loadMembers().then(setMembers);
+    loadDeadline().then(dl=>{ if(dl) setDlInput(new Date(dl).toISOString().slice(0,16)); });
+  },[]);
+
+  const addMember = async () => {
+    if (!newMember.trim()) return;
+    const updated = [...new Set([...members, newMember.trim()])];
+    setSaving(true); await saveMembers(updated); setMembers(updated); setNewMember(""); setSaving(false);
+  };
+  const removeMember = async (name) => { const u=members.filter(m=>m!==name); await saveMembers(u); setMembers(u); };
+  const saveDL = async () => { setSaving(true); await saveDeadline(dlInput?new Date(dlInput).toISOString():""); setDlSaved(true); setSaving(false); setTimeout(()=>setDlSaved(false),2000); };
+  const clearDL = async () => { await saveDeadline(""); setDlInput(""); setDlSaved(true); setTimeout(()=>setDlSaved(false),2000); };
+
+  const filtered = proposals.filter(p=>(filter==="全部"||p.status===filter)&&(secFilter==="全部"||p.section===secFilter))
+    .sort((a,b)=>new Date(b.createdAt)-new Date(a.createdAt));
+  const counts = STATUS_LABEL.reduce((acc,s)=>({...acc,[s]:proposals.filter(p=>p.status===s).length}),{});
+
+  return (
+    <div>
+      <div style={{display:"flex",gap:10,marginBottom:20,flexWrap:"wrap"}}>
+        {[["全部",proposals.length,C.ink],...STATUS_LABEL.map(s=>[s,counts[s],STATUS_COLOR[s]])].map(([label,count,color])=>(
+          <div key={label} onClick={()=>setFilter(label)}
+            style={{padding:"8px 16px",borderRadius:3,cursor:"pointer",fontSize:13,fontWeight:filter===label?700:400,
+              background:filter===label?color:C.cream,color:filter===label?"#fff":C.ink,border:`1px solid ${filter===label?color:C.border}`}}>
+            {label} <span style={{fontWeight:700,fontSize:16}}>{count}</span>
+          </div>
+        ))}
+      </div>
+      <div style={{display:"flex",gap:8,marginBottom:16,flexWrap:"wrap"}}>
+        {["全部","討論事項","報告事項","臨時動議"].map(s=>(
+          <button key={s} onClick={()=>setSecFilter(s)}
+            style={{padding:"4px 14px",fontSize:12,cursor:"pointer",borderRadius:12,
+              border:`1px solid ${SC[s]||C.border}`,background:secFilter===s?(SC[s]||C.ink):"transparent",
+              color:secFilter===s?"#fff":(SC[s]||C.muted)}}>{s}</button>
+        ))}
+      </div>
+      {filtered.length===0 ? <div style={{color:C.muted,textAlign:"center",padding:"24px 0"}}>沒有符合條件的提案</div>
+        : filtered.map(p=><ProposalCard key={p.id} p={p} isAdmin={true} onStatusChange={onStatusChange} onDelete={onDelete}/>)}
+
+      <hr style={{border:"none",borderTop:`1px solid ${C.border}`,margin:"28px 0 20px"}}/>
+
+      {/* 截止時間 */}
+      <div style={{marginBottom:28}}>
+        <div style={{fontWeight:700,fontSize:14,marginBottom:8}}>⏰ 提案截止時間設定</div>
+        <div style={{fontSize:12,color:C.muted,marginBottom:12}}>設定後提案頁面顯示倒數，截止後自動鎖住。留空表示不限制。</div>
+        <div style={{display:"flex",gap:10,flexWrap:"wrap",alignItems:"center"}}>
+          <input type="datetime-local" value={dlInput} onChange={e=>setDlInput(e.target.value)}
+            style={{border:`1px solid ${C.border}`,padding:"7px 11px",fontSize:13,borderRadius:2,background:C.cream}}/>
+          <Btn onClick={saveDL} disabled={saving} variant="gold">{dlSaved?"✓ 已儲存":"儲存截止時間"}</Btn>
+          {dlInput && <Btn onClick={clearDL} variant="ghost">清除</Btn>}
+        </div>
+        {dlInput && <div style={{fontSize:12,color:C.muted,marginTop:8}}>
+          目前設定：{new Date(dlInput).toLocaleString("zh-TW")}
+          {new Date()>new Date(dlInput)
+            ? <span style={{color:C.red,marginLeft:8,fontWeight:700}}>（已截止）</span>
+            : <span style={{color:C.green,marginLeft:8}}>（收件中）</span>}
+        </div>}
+      </div>
+
+      {/* 人員名單 */}
+      <div>
+        <div style={{fontWeight:700,fontSize:14,marginBottom:8}}>👥 與會人員名單管理</div>
+        <div style={{fontSize:12,color:C.muted,marginBottom:12}}>設定後提案頁面出現快速選取按鈕</div>
+        <div style={{display:"flex",gap:8,marginBottom:14}}>
+          <input value={newMember} onChange={e=>setNewMember(e.target.value)} placeholder="輸入姓名後按新增"
+            onKeyDown={e=>e.key==="Enter"&&addMember()}
+            style={{flex:1,border:`1px solid ${C.border}`,padding:"7px 11px",fontSize:13,borderRadius:2,background:C.cream}}/>
+          <Btn onClick={addMember} disabled={saving}>新增</Btn>
+        </div>
+        <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+          {members.map(m=><div key={m} style={{display:"flex",alignItems:"center",gap:4,padding:"5px 12px",
+            background:C.cream,border:`1px solid ${C.border}`,borderRadius:20,fontSize:13}}>
+            {m}<button onClick={()=>removeMember(m)} style={{background:"none",border:"none",cursor:"pointer",color:C.muted,fontSize:14}}>✕</button>
+          </div>)}
+          {!members.length && <span style={{color:C.muted,fontSize:12}}>尚未新增任何人員</span>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function AdminLogin({onLogin}) {
+  const [pin, setPin] = useState(""); const [err, setErr] = useState(false);
+  const submit = () => { if(pin===ADMIN_PIN){onLogin();}else{setErr(true);setPin("");} };
+  return (
+    <div style={{maxWidth:320,margin:"40px auto",textAlign:"center"}}>
+      <div style={{fontWeight:700,fontSize:16,marginBottom:20}}>管理員登入</div>
+      <input type="password" value={pin} onChange={e=>{setPin(e.target.value);setErr(false);}} placeholder="請輸入 PIN 碼"
+        onKeyDown={e=>e.key==="Enter"&&submit()}
+        style={{width:"100%",border:`1px solid ${err?C.red:C.border}`,padding:"10px 14px",fontSize:16,borderRadius:2,textAlign:"center",background:C.cream,marginBottom:10}}/>
+      {err && <div style={{color:C.red,fontSize:13,marginBottom:8}}>PIN 碼錯誤</div>}
+      <Btn onClick={submit} style={{width:"100%"}}>登入</Btn>
+      <div style={{fontSize:11,color:C.muted,marginTop:12}}>預設 PIN：{ADMIN_PIN}</div>
+    </div>
+  );
+}
+
+function App() {
+  const [tab, setTab] = useState("submit");
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [showLogin, setShowLogin] = useState(false);
+  const [proposals, setProposals] = useState([]);
+  const [members, setMembers] = useState([]);
+  const [myName, setMyName] = useState("");
+  const [deadline, setDeadline] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [refreshKey, setRefreshKey] = useState(0);
+
+  useEffect(()=>{
+    setLoading(true);
+    Promise.all([loadProposals(),loadMembers(),loadDeadline()]).then(([p,m,d])=>{
+      setProposals(p); setMembers(m); setDeadline(d); setLoading(false);
+    });
+  },[refreshKey]);
+
+  const refresh = () => setRefreshKey(k=>k+1);
+
+  const handleStatusChange = async (id, status) => {
+    const updated = proposals.map(p=>p.id===id?{...p,status}:p);
+    await saveProposals(updated); setProposals(updated);
+  };
+  const handleDelete = async (id) => {
+    if (!confirm("確定要刪除這筆提案嗎？")) return;
+    const updated = proposals.filter(p=>p.id!==id);
+    await saveProposals(updated); setProposals(updated);
+  };
+
+  const TABS = [["submit","📝 送出提案"],["mine","📋 我的紀錄"],["admin","⚙️ 管理端"]];
+
+  return (
+    <div style={{fontFamily:"'Noto Serif TC',STSong,serif",background:"#f7f4ee",minHeight:"100vh",color:"#1a1610"}}>
+      {/* header */}
+      <div style={{background:"#1a1610",color:"#ede8d8",padding:"20px 32px 0",borderBottom:"3px solid #b5820a"}}>
+        <div style={{maxWidth:800,margin:"0 auto"}}>
+          <div style={{fontSize:11,opacity:.6,letterSpacing:".1em",marginBottom:4}}>台北市醫師公會　健康台灣深耕計畫</div>
+          <div style={{fontSize:19,fontWeight:700,letterSpacing:".1em",marginBottom:14}}>內部工作會議　提案收集平台</div>
+          <div style={{display:"flex",gap:0}}>
+            {TABS.map(([id,l])=>(
+              <button key={id} onClick={()=>{
+                if(id==="admin"&&!isAdmin){setShowLogin(true);return;}
+                setTab(id);
+              }} style={{padding:"9px 22px",fontSize:13,cursor:"pointer",border:"none",
+                borderBottom:tab===id?"3px solid #e8c84a":"3px solid transparent",
+                background:"transparent",color:tab===id?"#fff":"rgba(255,255,255,0.55)",
+                fontWeight:tab===id?700:400,marginBottom:-3}}>{l}</button>
+            ))}
+            {isAdmin && <button onClick={()=>{setIsAdmin(false);setTab("submit");}}
+              style={{marginLeft:"auto",padding:"9px 14px",fontSize:12,cursor:"pointer",border:"none",background:"transparent",color:"rgba(255,255,255,0.5)",marginBottom:-3}}>登出管理員</button>}
+          </div>
+        </div>
+      </div>
+
+      <div style={{maxWidth:800,margin:"0 auto",padding:"28px 24px"}}>
+        {/* login modal */}
+        {showLogin && !isAdmin && (
+          <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.45)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:100}}>
+            <div style={{...card,padding:28,width:340}}>
+              <AdminLogin onLogin={()=>{setIsAdmin(true);setShowLogin(false);setTab("admin");}}/>
+              <div style={{textAlign:"center",marginTop:12}}>
+                <button onClick={()=>setShowLogin(false)} style={{background:"none",border:"none",cursor:"pointer",color:C.muted,fontSize:13}}>取消</button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {loading && <div style={{color:C.muted,textAlign:"center",padding:"40px 0",fontSize:14}}>載入中…</div>}
+
+        {!loading && <>
+          {/* deadline banner */}
+          {deadline && tab==="submit" && (()=>{
+            const dl=new Date(deadline), now=new Date(), isPast=now>dl;
+            const diffH=Math.floor((dl-now)/3600000), diffD=Math.floor(diffH/24), soon=!isPast&&diffH<=24;
+            return <div style={{padding:"10px 16px",borderRadius:3,marginBottom:16,fontSize:13,
+              border:`1px solid ${isPast?C.red:soon?C.gold:C.green}`,
+              background:isPast?"#fdecea":soon?"#fffde7":"#e8f5e9",
+              color:isPast?C.red:soon?"#795500":C.green}}>
+              {isPast?`⛔ 提案截止時間（${dl.toLocaleString("zh-TW")}）已過`
+                :soon?`⚠️ 提案截止：${dl.toLocaleString("zh-TW")}（還有 ${diffH} 小時）`
+                :`📅 提案截止：${dl.toLocaleString("zh-TW")}（還有 ${diffD} 天 ${diffH%24} 小時）`}
+            </div>;
+          })()}
+
+          {tab==="submit" && <div style={{...card,padding:24}}><SubmitView members={members} myName={myName} onMyNameChange={setMyName} onRefresh={refresh} deadline={deadline}/></div>}
+          {tab==="mine" && <div style={{...card,padding:24}}>
+            <div style={{fontWeight:700,fontSize:15,marginBottom:16}}>{myName?`${myName} 的提案紀錄`:"我的提案紀錄"}</div>
+            <MyView proposals={proposals} myName={myName}/>
+          </div>}
+          {tab==="admin"&&isAdmin && <div style={{...card,padding:24}}>
+            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:16}}>
+              <div style={{fontWeight:700,fontSize:15}}>所有提案（共 {proposals.length} 筆）</div>
+              <button onClick={refresh} style={{padding:"5px 14px",fontSize:12,cursor:"pointer",borderRadius:2,border:`1px solid ${C.border}`,background:"transparent",color:C.muted}}>重新整理</button>
+            </div>
+            <AdminView proposals={proposals} onStatusChange={handleStatusChange} onDelete={handleDelete} onRefresh={refresh}/>
+          </div>}
+        </>}
+
+        <div style={{marginTop:20,fontSize:11,color:C.muted,textAlign:"center",lineHeight:1.8}}>
+          提案資料儲存於 Firebase 雲端，管理員審閱後標記狀態。<br/>
+          議程系統可直接載入「已納入」的提案。
+        </div>
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+</script>
+</body>
+</html>
