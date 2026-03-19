@@ -1669,90 +1669,93 @@ function App() {
             <div style={S.card}>
               <div style={S.ch()}>步驟四　列管事項確認</div>
               <div style={S.cb}>
-                <div style={{fontSize:13,color:C.muted,marginBottom:14,lineHeight:1.8}}>
-                  請從會議紀錄中，將「歷次決議辦理情形」表格的內容複製貼到下方，系統會解析出各筆列管事項。或直接手動新增。
+                <div style={{fontSize:13,color:C.muted,marginBottom:16,lineHeight:1.8}}>
+                  請對照上次會議紀錄「歷次決議辦理情形」，逐筆填入列管事項。每筆選擇「繼續列管」或「解除列管」。
                 </div>
 
-                {/* 貼上解析區 */}
-                <PasteParser onParsed={(items)=>{
-                  const newItems = items.map(item=>({
-                    ...item,
-                    id:`m${Date.now()}${Math.random().toString(36).slice(2,5)}`,
-                    include:true, mode:"decision", customText:""
-                  }));
-                  setManaged(prev=>[...prev,...newItems]);
-                }}/>
-
-                <div style={{borderTop:`1px solid ${C.border}`,margin:"16px 0 12px"}}/>
-
-                {/* 列管事項清單 */}
-                {[...managed,...suggested].map((item, i) => {
-                  const isManaged = i < managed.length;
-                  const updateItem = (newVal) => {
-                    if (isManaged) {
-                      const n=[...managed]; n[i]={...n[i],...newVal}; setManaged(n);
-                    } else {
-                      const idx=i-managed.length; const n=[...suggested]; n[idx]={...n[idx],...newVal}; setSuggested(n);
-                    }
-                  };
-                  const removeItem = () => {
-                    if (isManaged) setManaged(prev=>prev.filter((_,j)=>j!==i));
-                    else setSuggested(prev=>prev.filter((_,j)=>j!==(i-managed.length)));
-                  };
-                  return (
-                    <div key={item.id||i} style={{...S.ibox,marginBottom:10,position:"relative",
-                      borderLeft:`3px solid ${item.include?C.blue:C.border}`}}>
-                      <button onClick={removeItem} style={{position:"absolute",top:8,right:10,background:"none",border:"none",cursor:"pointer",color:"#bbb",fontSize:16}}>✕</button>
-                      <div style={{display:"flex",gap:10,marginBottom:8,flexWrap:"wrap",paddingRight:24}}>
-                        <div style={{flex:"0 0 180px"}}>
-                          <div style={S.lbl}>來源</div>
-                          <input style={S.inp} value={item.source||""} onChange={e=>updateItem({source:e.target.value})} placeholder="第X次 臨時動議X"/>
-                        </div>
-                        <div style={{flex:1,minWidth:180}}>
-                          <div style={S.lbl}>案由</div>
-                          <input style={S.inp} value={item.caseTitle||""} onChange={e=>updateItem({caseTitle:e.target.value})} placeholder="案由標題"/>
-                        </div>
-                      </div>
-                      <div style={{marginBottom:8}}>
-                        <div style={S.lbl}>決議事項</div>
-                        <textarea style={{...S.ta,minHeight:48}} value={item.content||""} onChange={e=>updateItem({content:e.target.value})} placeholder="原決議內容摘要"/>
-                      </div>
-                      <div style={{display:"flex",gap:16,alignItems:"center",marginBottom:item.include?8:0}}>
-                        <span style={{fontSize:12,color:C.muted}}>本次：</span>
-                        {[["繼續列管",true],["解除列管",false]].map(([label,val])=>(
-                          <label key={label} style={{display:"flex",alignItems:"center",gap:5,cursor:"pointer",fontSize:13,
-                            color:item.include===val?(val?C.blue:"#888"):C.muted,fontWeight:item.include===val?700:400}}>
-                            <input type="radio" name={`inc-${item.id||i}`} checked={item.include===val} onChange={()=>updateItem({include:val})}/>
-                            {label}
-                          </label>
+                {/* 列管事項表格 */}
+                <div style={{overflowX:"auto",marginBottom:12}}>
+                  <table style={{width:"100%",borderCollapse:"collapse",fontSize:12,minWidth:700}}>
+                    <thead>
+                      <tr>
+                        {["來源（第X次 臨時動議X）","案由","決議事項摘要","本次辦理情形","本次決定",""].map((h,i)=>(
+                          <th key={i} style={{background:C.ink,color:"#e8dfc8",padding:"7px 10px",border:`1px solid #555`,
+                            fontSize:11,textAlign:"left",whiteSpace:"nowrap",
+                            width:i===4?"90px":i===5?"36px":"auto"}}>{h}</th>
                         ))}
-                      </div>
-                      {item.include && <>
-                        <div style={{display:"flex",gap:18,marginBottom:6}}>
-                          {[["decision","依決議辦理"],["custom","另外輸入說明"]].map(([m,l])=>(
-                            <label key={m} style={{display:"flex",alignItems:"center",gap:4,cursor:"pointer",fontSize:12}}>
-                              <input type="radio" name={`mode-${item.id||i}`} checked={item.mode===m} onChange={()=>updateItem({mode:m})}/>{l}
-                            </label>
-                          ))}
-                        </div>
-                        {item.mode==="custom" && (
-                          <textarea style={{...S.ta,minHeight:56}} value={item.customText||""} onChange={e=>updateItem({customText:e.target.value})} placeholder="請輸入本次辦理情形說明"/>
-                        )}
-                      </>}
-                    </div>
-                  );
-                })}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {[...managed,...suggested].map((item,i)=>{
+                        const isManaged = i < managed.length;
+                        const update = (val) => {
+                          if(isManaged){const n=[...managed];n[i]={...n[i],...val};setManaged(n);}
+                          else{const j=i-managed.length;const n=[...suggested];n[j]={...n[j],...val};setSuggested(n);}
+                        };
+                        const remove = () => {
+                          if(isManaged) setManaged(p=>p.filter((_,j)=>j!==i));
+                          else setSuggested(p=>p.filter((_,j)=>j!==(i-managed.length)));
+                        };
+                        const inp = {width:"100%",border:`1px solid ${C.border}`,padding:"5px 7px",fontSize:12,background:C.cream,fontFamily:"inherit"};
+                        return (
+                          <tr key={item.id||i} style={{background:i%2?"#fdf9f0":"white",
+                            opacity:item.include===false?0.45:1}}>
+                            <td style={{padding:"5px 6px",border:`1px solid ${C.border}`,verticalAlign:"top"}}>
+                              <input style={inp} value={item.source||""} onChange={e=>update({source:e.target.value})} placeholder="第十六次 臨時動議三"/>
+                            </td>
+                            <td style={{padding:"5px 6px",border:`1px solid ${C.border}`,verticalAlign:"top"}}>
+                              <input style={inp} value={item.caseTitle||""} onChange={e=>update({caseTitle:e.target.value})} placeholder="合約書研擬"/>
+                            </td>
+                            <td style={{padding:"5px 6px",border:`1px solid ${C.border}`,verticalAlign:"top"}}>
+                              <textarea style={{...inp,resize:"vertical",minHeight:52}} value={item.content||""} onChange={e=>update({content:e.target.value})} placeholder="原決議內容"/>
+                            </td>
+                            <td style={{padding:"5px 6px",border:`1px solid ${C.border}`,verticalAlign:"top"}}>
+                              {item.include && <>
+                                <div style={{display:"flex",gap:10,marginBottom:4}}>
+                                  {[["decision","依決議辦理"],["custom","另外填寫"]].map(([m,l])=>(
+                                    <label key={m} style={{display:"flex",alignItems:"center",gap:3,cursor:"pointer",fontSize:11,whiteSpace:"nowrap"}}>
+                                      <input type="radio" name={`mode-${item.id||i}`} checked={item.mode===m} onChange={()=>update({mode:m})}/>{l}
+                                    </label>
+                                  ))}
+                                </div>
+                                {item.mode==="custom" && (
+                                  <textarea style={{...inp,resize:"vertical",minHeight:44}} value={item.customText||""} onChange={e=>update({customText:e.target.value})} placeholder="辦理情形說明"/>
+                                )}
+                              </>}
+                              {item.include===false && <span style={{fontSize:11,color:"#aaa"}}>解除列管</span>}
+                            </td>
+                            <td style={{padding:"5px 6px",border:`1px solid ${C.border}`,textAlign:"center",verticalAlign:"middle"}}>
+                              <div style={{display:"flex",flexDirection:"column",gap:4,alignItems:"center"}}>
+                                <label style={{fontSize:11,cursor:"pointer",display:"flex",alignItems:"center",gap:3,
+                                  color:item.include!==false?C.blue:C.muted,fontWeight:item.include!==false?700:400}}>
+                                  <input type="radio" name={`inc-${item.id||i}`} checked={item.include!==false} onChange={()=>update({include:true})}/>繼續
+                                </label>
+                                <label style={{fontSize:11,cursor:"pointer",display:"flex",alignItems:"center",gap:3,
+                                  color:item.include===false?C.muted:C.muted,fontWeight:item.include===false?700:400}}>
+                                  <input type="radio" name={`inc-${item.id||i}`} checked={item.include===false} onChange={()=>update({include:false})}/>解除
+                                </label>
+                              </div>
+                            </td>
+                            <td style={{padding:"5px 6px",border:`1px solid ${C.border}`,textAlign:"center",verticalAlign:"middle"}}>
+                              <button onClick={remove} style={{background:"none",border:"none",cursor:"pointer",color:"#ccc",fontSize:16,lineHeight:1}}>✕</button>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
 
-                <button style={{...S.btnO,fontSize:12}} onClick={()=>{
+                <button style={{...S.btnS(),fontSize:12}} onClick={()=>{
                   setSuggested(prev=>[...prev,{
                     id:`m${Date.now()}`,source:"",caseTitle:"",content:"",
                     include:true,mode:"decision",customText:"",needsManagement:true
                   }]);
-                }}>＋ 手動新增一筆</button>
+                }}>＋ 新增一筆列管事項</button>
 
-                {[...managed,...suggested].length===0 && (
-                  <div style={{color:C.muted,fontSize:13,padding:"8px 0 0"}}>
-                    尚未有任何列管事項，可貼上紀錄內容解析，或手動新增。
+                {[...managed,...suggested].length===0&&(
+                  <div style={{color:C.muted,fontSize:13,padding:"10px 0 0"}}>
+                    尚未有列管事項，請按上方按鈕新增。
                   </div>
                 )}
               </div>
