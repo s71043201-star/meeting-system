@@ -9,7 +9,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"></script>
-<script src="https://unpkg.com/docx@8.5.0/build/index.js"></script>
+<script src="docx.js"></script>
 <script type="module">
   import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
   import { getDatabase, ref, get, set } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-database.js";
@@ -1569,35 +1569,91 @@ function App() {
 
                     {/* S3 */}
           {step===3&&<>
-            {managed.length>0&&(
-              <div style={S.card}>
-                <div style={S.ch()}>📌 前次已勾「繼續列管」的事項</div>
-                <div style={S.cb}>
-                  <div style={{fontSize:12,color:C.muted,marginBottom:10}}>
-                    上次會議紀錄中勾選「☑繼續列管」的項目，請勾選要帶入本次議程的。
+            {/* ── 手動列管輸入區 ── */}
+            <div style={S.card}>
+              <div style={S.ch()}>步驟四　列管事項確認</div>
+              <div style={S.cb}>
+                <div style={{fontSize:13,color:C.muted,marginBottom:14,lineHeight:1.8}}>
+                  以下是從會議紀錄解析出的事項（若為空可手動新增）。請為每筆選擇<strong>繼續列管</strong>或<strong>解除列管</strong>，繼續列管者請填寫辦理情形。
+                </div>
+
+                {/* 已解析項目 */}
+                {[...managed, ...suggested].length > 0 && (
+                  <div style={{marginBottom:16}}>
+                    {[...managed, ...suggested].map((item, i) => {
+                      const allItems = [...managed, ...suggested];
+                      const isManaged = i < managed.length;
+                      const updateItem = (newVal) => {
+                        if (isManaged) {
+                          const n=[...managed]; n[i]={...n[i],...newVal}; setManaged(n);
+                        } else {
+                          const idx=i-managed.length; const n=[...suggested]; n[idx]={...n[idx],...newVal}; setSuggested(n);
+                        }
+                      };
+                      return (
+                        <div key={item.id||i} style={{...S.ibox,marginBottom:10,borderLeft:`3px solid ${item.include?C.blue:C.border}`}}>
+                          <div style={{display:"flex",gap:10,marginBottom:8,flexWrap:"wrap"}}>
+                            <div style={{flex:1,minWidth:200}}>
+                              <div style={{fontSize:11,color:C.muted,marginBottom:3}}>來源</div>
+                              <input style={{...S.inp}} value={item.source||""} onChange={e=>updateItem({source:e.target.value})} placeholder="例：第十六次臨時動議三"/>
+                            </div>
+                            <div style={{flex:2,minWidth:200}}>
+                              <div style={{fontSize:11,color:C.muted,marginBottom:3}}>案由</div>
+                              <input style={{...S.inp}} value={item.caseTitle||""} onChange={e=>updateItem({caseTitle:e.target.value})} placeholder="案由標題"/>
+                            </div>
+                          </div>
+                          <div style={{marginBottom:8}}>
+                            <div style={{fontSize:11,color:C.muted,marginBottom:3}}>決議事項</div>
+                            <textarea style={{...S.ta,minHeight:48}} value={item.content||""} onChange={e=>updateItem({content:e.target.value})} placeholder="原決議內容摘要"/>
+                          </div>
+                          {/* 繼續/解除列管 toggle */}
+                          <div style={{display:"flex",gap:16,alignItems:"center",marginBottom:item.include?8:0}}>
+                            <span style={{fontSize:12}}>本次：</span>
+                            {[["繼續列管",true],["解除列管",false]].map(([label,val])=>(
+                              <label key={label} style={{display:"flex",alignItems:"center",gap:5,cursor:"pointer",fontSize:13,
+                                color:item.include===val?(val?C.blue:C.muted):C.muted,fontWeight:item.include===val?700:400}}>
+                                <input type="radio" name={`inc-${item.id||i}`} checked={item.include===val} onChange={()=>updateItem({include:val})}/>
+                                {label}
+                              </label>
+                            ))}
+                          </div>
+                          {item.include && (
+                            <div style={{marginTop:8}}>
+                              <div style={{fontSize:11,color:C.muted,marginBottom:3}}>本次會議追蹤辦理情形</div>
+                              <div style={{display:"flex",gap:8,marginBottom:6}}>
+                                {[["decision","依決議辦理"],["custom","另外輸入"]].map(([m,l])=>(
+                                  <label key={m} style={{display:"flex",alignItems:"center",gap:4,cursor:"pointer",fontSize:12}}>
+                                    <input type="radio" name={`mode-${item.id||i}`} checked={item.mode===m} onChange={()=>updateItem({mode:m})}/>{l}
+                                  </label>
+                                ))}
+                              </div>
+                              {item.mode==="custom" && (
+                                <textarea style={{...S.ta,minHeight:56}} value={item.customText||""} onChange={e=>updateItem({customText:e.target.value})} placeholder="請輸入辦理情形說明"/>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
                   </div>
-                  {managed.map((item,i)=><TrackedCard key={item.id||i} item={item} index={i} onChange={updateManaged}/>)}
-                </div>
-              </div>
-            )}
-            {suggested.length>0&&(
-              <div style={S.card}>
-                <div style={S.ch("#2e5d9a")}>📋 本次會議所有事項（請手動勾選要列管的）</div>
-                <div style={S.cb}>
-                  <div style={{fontSize:12,color:C.muted,marginBottom:10}}>
-                    以下是本次會議的報告事項、討論事項、臨時動議，<strong>請自行勾選</strong>哪些要帶入下次議程追蹤。預設全部<strong>未勾選</strong>。
+                )}
+
+                {/* 手動新增按鈕 */}
+                <button style={{...S.btnO,fontSize:12,marginBottom:8}} onClick={()=>{
+                  setSuggested(prev=>[...prev,{
+                    id:`m${Date.now()}`,source:"",caseTitle:"",content:"",
+                    include:true,mode:"decision",customText:"",needsManagement:true
+                  }]);
+                }}>＋ 手動新增列管事項</button>
+
+                {[...managed,...suggested].length===0 && (
+                  <div style={{color:C.muted,fontSize:13,padding:"8px 0"}}>
+                    尚未解析到任何事項，可點上方按鈕手動新增，或直接繼續。
                   </div>
-                  {suggested.map((item,i)=><TrackedCard key={item.id||i} item={item} index={i} onChange={updateSuggested}/>)}
-                </div>
+                )}
               </div>
-            )}
-            {managed.length===0&&suggested.length===0&&(
-              <div style={S.card}><div style={S.cb}>
-                <div style={{color:C.muted,textAlign:"center",padding:14}}>
-                  未解析到任何事項。請確認步驟一已上傳會議紀錄，或直接繼續。
-                </div>
-              </div></div>
-            )}
+            </div>
+
             <div style={{display:"flex",gap:10}}>
               <button style={S.btnO} onClick={()=>setStep(2)}>← 上一步</button>
               <button style={S.btn} onClick={()=>setStep(4)}>下一步：加入提案 →</button>
