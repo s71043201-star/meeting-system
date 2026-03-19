@@ -37,7 +37,18 @@
 <!-- v20260319115838 -->
 <div id="root"></div>
 <script>
-// docx-js browser - destructure lazily after CDN load
+// docx-js browser - constants only at top level
+const PAGE_W   = 11906;
+const ML       = 1795;
+const MR       = 1418;
+const MT       =  794;
+const MB       =  623;
+const BODY_W   = PAGE_W - ML - MR;
+const TABLE_W  = BODY_W + 600;
+const KAI = "標楷體";
+const PT  = n => n * 2;
+const sp = (before=0, after=0) => ({ before, after, line: 320, lineRule: "exact" });
+
 let Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell,
     AlignmentType, BorderStyle, WidthType, ShadingType, VerticalAlign,
     PageBreak, UnderlineType;
@@ -50,73 +61,58 @@ function initDocx() {
   return true;
 }
 
-// ── page layout (A4, DXA: 1440 = 1 inch, 567 = 1 cm) ──────────
-const PAGE_W   = 11906;                   // A4 width
-const ML       = 1795;                    // left  3.17 cm
-const MR       = 1418;                    // right 2.5  cm
-const MT       =  794;                    // top   1.4  cm
-const MB       =  623;                    // bottom 1.1 cm
-const BODY_W   = PAGE_W - ML - MR;       // 8693 usable text width
-const TABLE_W  = BODY_W + 600;            // tables wider by ~1cm each side
+async function generateAndDownloadDocx(data, filename) {
+  if (!initDocx()) throw new Error("docx 程式庫未載入，請重新整理頁面");
 
-const KAI = "標楷體";
-const PT  = n => n * 2;                   // half-points
+  // All helpers defined here, after initDocx()
+  const bNone  = { style: BorderStyle.NONE,   size: 0, color: "FFFFFF" };
+  const bThin  = { style: BorderStyle.SINGLE, size: 4, color: "000000" };
+  const all    = b => ({ top:b, bottom:b, left:b, right:b });
+  const noBdr  = all(bNone);
+  const thinBdr = all(bThin);
+  const hdrBdr  = all({ style: BorderStyle.SINGLE, size: 4, color: "4472C4" });
 
-// ── borders ─────────────────────────────────────────────────────
-const bNone  = { style: BorderStyle.NONE,   size: 0, color: "FFFFFF" };
-const bThin  = { style: BorderStyle.SINGLE, size: 4, color: "000000" };
-const all    = b => ({ top:b, bottom:b, left:b, right:b });
-const noBdr  = all(bNone);
-const thinBdr = all(bThin);
-const hdrBdr  = all({ style: BorderStyle.SINGLE, size: 4, color: "4472C4" });
+  const run = (text, size=12, bold=false, color=undefined) =>
+    new TextRun({ text, font: KAI, size: PT(size), bold, color });
 
-// ── spacing: fixed 16 pt line, controllable before/after ────────
-const sp = (before=0, after=0) => ({ before, after, line: 320, lineRule: "exact" });
+  function para(text, opts={}) {
+    const { size=12, bold=false, align=AlignmentType.LEFT, indent=0, before=0, after=60, color } = opts;
+    return new Paragraph({
+      alignment: align,
+      spacing: sp(before, after),
+      indent: indent ? { left: indent } : undefined,
+      children: [run(text, size, bold, color)]
+    });
+  }
+  const ctrPara = (text, size=12, bold=false) => para(text, { size, bold, align: AlignmentType.CENTER });
+  const h2Para  = text => para(text, { size: 14, bold: true, before: 200, after: 60 });
+  const h3Para  = (text, indent=480) => para(text, { size: 12, indent, before: 120, after: 40 });
+  const emptyP  = () => para("", { size: 12, after: 0 });
 
-// ── paragraph helpers ────────────────────────────────────────────
-const run = (text, size=12, bold=false, color=undefined) =>
-  new TextRun({ text, font: KAI, size: PT(size), bold, color });
+  function cell(text, w, opts={}) {
+    const { bold=false, size=12, shade, borders=thinBdr, span, valign=VerticalAlign.CENTER, color } = opts;
+    const texts = Array.isArray(text) ? text : [text];
+    return new TableCell({
+      width: w ? { size: w, type: WidthType.DXA } : undefined,
+      borders,
+      shading: shade ? { fill: shade, type: ShadingType.CLEAR } : undefined,
+      verticalAlign: valign,
+      columnSpan: span,
+      margins: { top: 60, bottom: 60, left: 180, right: 180 },
+      children: texts.map(t => new Paragraph({
+        spacing: sp(30, 30),
+        children: [run(String(t||""), size, bold, color)]
+      }))
+    });
+  }
 
-function para(text, opts={}) {
-  const { size=12, bold=false, align=AlignmentType.LEFT, indent=0, before=0, after=60, color } = opts;
-  return new Paragraph({
-    alignment: align,
-    spacing: sp(before, after),
-    indent: indent ? { left: indent } : undefined,
-    children: [run(text, size, bold, color)]
-  });
-}
-const ctrPara = (text, size=12, bold=false) => para(text, { size, bold, align: AlignmentType.CENTER });
-const h2Para  = text => para(text, { size: 14, bold: true, before: 200, after: 60 });
-const h3Para  = (text, indent=480) => para(text, { size: 12, indent, before: 120, after: 40 });
-const emptyP  = () => para("", { size: 12, after: 0 });
+  function hdrCell(text, w, span) {
+    return cell(text, w, {
+      bold: true, size: 12, shade: "BDD7EE", color: "1F3864",
+      borders: hdrBdr, span
+    });
+  }
 
-// ── cell builder ─────────────────────────────────────────────────
-function cell(text, w, opts={}) {
-  const { bold=false, size=12, shade, borders=thinBdr, span, valign=VerticalAlign.CENTER, color } = opts;
-  const texts = Array.isArray(text) ? text : [text];
-  return new TableCell({
-    width: w ? { size: w, type: WidthType.DXA } : undefined,
-    borders,
-    shading: shade ? { fill: shade, type: ShadingType.CLEAR } : undefined,
-    verticalAlign: valign,
-    columnSpan: span,
-    margins: { top: 60, bottom: 60, left: 180, right: 180 },
-    children: texts.map(t => new Paragraph({
-      spacing: sp(30, 30),
-      children: [run(String(t||""), size, bold, color)]
-    }))
-  });
-}
-
-function hdrCell(text, w, span) {
-  return cell(text, w, {
-    bold: true, size: 12, shade: "BDD7EE", color: "1F3864",
-    borders: hdrBdr, span
-  });
-}
-
-// ── prescription stats ───────────────────────────────────────────
 function buildPrescTable(prescStats) {
   if (!prescStats) return [para("（尚未上傳處方資料）", { indent: 480 })];
   const diff = (a, b) => {
@@ -136,7 +132,7 @@ function buildPrescTable(prescStats) {
   const cw = [lw, dw, dw, dw, dw, dw, dw, dw, dw, dw + rem];
 
   return [new Table({
-    width: { size: TABLE_W, type: WidthType.DXA }, columnWidths: cw,
+    width: { size: TABLE_W, type: "dxa" }, columnWidths: cw,
     rows: [
       new TableRow({ children: [
         hdrCell("健康處方類別", cw[0]),
@@ -173,12 +169,12 @@ function buildClinicTable(clinics) {
     items.forEach((c, i) => {
       dataRows.push(new TableRow({ children: [
         i === 0 ? new TableCell({
-          width: { size: cw[0], type: WidthType.DXA }, rowSpan: items.length,
-          borders: thinBdr, verticalAlign: VerticalAlign.CENTER,
-          shading: { fill: "DEEAF1", type: ShadingType.CLEAR },
+          width: { size: cw[0], type: "dxa" }, rowSpan: items.length,
+          borders: thinBdr, verticalAlign: "center",
+          shading: { fill: "DEEAF1", type: "clear" },
           margins: { top: 60, bottom: 60, left: 100, right: 100 },
           children: [new Paragraph({
-            alignment: AlignmentType.CENTER, spacing: sp(30,30),
+            alignment: "center", spacing: sp(30,30),
             children: [run(grp, 12, true, "1F3864")]
           })]
         }) : null,
@@ -195,7 +191,7 @@ function buildClinicTable(clinics) {
   });
 
   return [new Table({
-    width: { size: TABLE_W, type: WidthType.DXA }, columnWidths: cw,
+    width: { size: TABLE_W, type: "dxa" }, columnWidths: cw,
     rows: [
       new TableRow({ children: [
         hdrCell("分類",cw[0]), hdrCell("診所名稱",cw[1]), hdrCell("預計實地教學時間",cw[2]),
@@ -213,7 +209,7 @@ function buildSimpleTable(rows, cols, colWidths) {
   if (!filtered.length) return [para("（無資料）", { indent: 480 })];
   const keys = cols.map((_, i) => i); // use positional
   return [new Table({
-    width: { size: TABLE_W, type: WidthType.DXA }, columnWidths: colWidths,
+    width: { size: TABLE_W, type: "dxa" }, columnWidths: colWidths,
     rows: [
       new TableRow({ children: cols.map((c,i) => hdrCell(c, colWidths[i])) }),
       ...filtered.map(r => {
@@ -232,7 +228,7 @@ function buildWorkTable(reports) {
   const lw = 1400, rest = TABLE_W - lw;
   const cw = [lw, Math.floor(rest/2), Math.ceil(rest/2)];
   return [new Table({
-    width: { size: TABLE_W, type: WidthType.DXA }, columnWidths: cw,
+    width: { size: TABLE_W, type: "dxa" }, columnWidths: cw,
     rows: [
       new TableRow({ children: [hdrCell("報告人",cw[0]), hdrCell("近期工作執行情形",cw[1]), hdrCell("未來工作重點規劃",cw[2])] }),
       ...reports.map(r => new TableRow({ children: [
@@ -250,7 +246,7 @@ function buildScheduleTable(rows) {
   if (!filtered.length) return [para("（無）", { indent: 480 })];
   const cw = [2000, TABLE_W-2000-1800, 1800];
   return [new Table({
-    width: { size: TABLE_W, type: WidthType.DXA }, columnWidths: cw,
+    width: { size: TABLE_W, type: "dxa" }, columnWidths: cw,
     rows: [
       new TableRow({ children: [hdrCell("時間",cw[0]),hdrCell("會議名稱",cw[1]),hdrCell("地點",cw[2])] }),
       ...filtered.map(r => new TableRow({ children: [cell(r.date||"",cw[0],{size:12}),cell(r.name||"",cw[1],{size:12}),cell(r.location||"",cw[2],{size:12})] }))
@@ -263,7 +259,7 @@ function buildVisitTable(rows) {
   if (!filtered.length) return [para("（無）", { indent: 480 })];
   const cw = [2200, TABLE_W-2200-1400, 1400];
   return [new Table({
-    width: { size: TABLE_W, type: WidthType.DXA }, columnWidths: cw,
+    width: { size: TABLE_W, type: "dxa" }, columnWidths: cw,
     rows: [
       new TableRow({ children: [hdrCell("時間",cw[0]),hdrCell("拜會單位及人員",cw[1]),hdrCell("執行狀況",cw[2])] }),
       ...filtered.map(r => new TableRow({ children: [cell(r.date||"",cw[0],{size:12}),cell(r.unit||"",cw[1],{size:12}),cell(r.status||"",cw[2],{size:12})] }))
@@ -294,13 +290,13 @@ function buildTrackedItems(tracked) {
 
   Object.entries(groups).forEach(([meetingName, items]) => {
     elements.push(new Table({
-      width: { size: TABLE_W, type: WidthType.DXA }, columnWidths: cw,
+      width: { size: TABLE_W, type: "dxa" }, columnWidths: cw,
       rows: [
         // Meeting name spanning header
         new TableRow({ children: [
           new TableCell({
             columnSpan: 4, borders: thinBdr,
-            shading: { fill: "BDD7EE", type: ShadingType.CLEAR },
+            shading: { fill: "BDD7EE", type: "clear" },
             margins: { top: 60, bottom: 60, left: 180, right: 180 },
             children: [new Paragraph({ spacing: sp(40,40), children: [run(
             meetingName.includes("會議") ? meetingName : meetingName + "　內部工作會議",
@@ -396,7 +392,7 @@ function buildDocx(data) {
     const lw = 2200, rest = TABLE_W - lw;
     const cw = [lw, 1100, 1000, 2300, rest-1100-1000-2300];
     courseElems.push(new Table({
-      width: { size: TABLE_W, type: WidthType.DXA }, columnWidths: cw,
+      width: { size: TABLE_W, type: "dxa" }, columnWidths: cw,
       rows: [
         new TableRow({ children: [hdrCell("課程名稱",cw[0]),hdrCell("講師",cw[1]),hdrCell("時間",cw[2]),hdrCell("日期",cw[3]),hdrCell("授課地點",cw[4])] }),
         ...tc.map(c => new TableRow({ children: [
@@ -516,8 +512,6 @@ function buildDocx(data) {
   });
 }
 
-async function generateAndDownloadDocx(data, filename) {
-  if (!initDocx()) throw new Error("docx 程式庫未載入，請重新整理頁面");
   const doc = buildDocx(data);
   const blob = await Packer.toBlob(doc);
   const url = URL.createObjectURL(blob);
@@ -527,9 +521,8 @@ async function generateAndDownloadDocx(data, filename) {
   a.click();
   URL.revokeObjectURL(url);
 }
-
-// ════════════════════════════════════════════════════════════
 </script>
+
 <script type="text/babel" data-presets="react">
 const { useState, useEffect, useRef, useCallback } = React;
 const API = "https://claude-proxy.s71043201.workers.dev";
@@ -946,12 +939,7 @@ ${text}`;
         <textarea
           value={text} onChange={e=>setText(e.target.value)}
           style={{...S.ta,minHeight:140,marginBottom:8,fontSize:12}}
-          placeholder={"例：
-第十四次臨時動議三
-合約書研擬。
-（一）三款合約書已送請法律顧問審閱...
-☑繼續列管
-（一）依決議辦理..."}
+          placeholder="例：第十四次 臨時動議三、合約書研擬。☑繼續列管 依決議辦理..."
         />
         <button style={S.btn} onClick={handleParse} disabled={loading||!text.trim()}>
           {loading?"解析中…":"✦ AI 解析"}
