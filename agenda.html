@@ -105,20 +105,19 @@ async function fileToBase64(file) {
 }
 function parseJSON(t,fb){try{return JSON.parse(t.replace(/```json\n?|```/g,"").trim());}catch{return fb;}}
 async function extractMinutes(file) {
-  const prompt=`請從這份會議紀錄中擷取資訊，以 JSON 格式回傳，不要有其他文字：
+  const prompt=`請從這份會議紀錄中擷取所有需要追蹤的事項，以 JSON 格式回傳，不要有其他文字：
 {
   "managedItems": [
-    {"id":"m1","source":"來源（例：第十次臨時動議二）","caseTitle":"案由","content":"決議事項摘要","status":"目前辦理情形摘要","isManaged":true}
+    {"id":"m1","source":"來源（例：第十次臨時動議二）","caseTitle":"案由","content":"決議事項完整摘要","status":"目前辦理情形摘要","isManaged":true}
   ],
   "newItems": [
-    {"id":"n1","source":"來源（例：報告事項一、討論事項第X案、臨時動議第X案）","caseTitle":"案由","content":"決議或重要內容摘要","needsManagement":true,"reason":"來源類型"}
+    {"id":"n1","source":"討論事項第一案","caseTitle":"案由","content":"完整決議內容","needsManagement":true,"reason":"討論事項"}
   ]
 }
-
-擷取規則：
-1. managedItems：找出「追蹤辦理情形」或「決議辦理情形」欄位中，有勾選「繼續列管」（☑繼續列管 或 ■繼續列管）的所有項目，isManaged 設為 true。
-2. newItems：找出本次會議的「報告事項」「討論事項」「臨時動議」中的所有案件，全部列入，needsManagement 設為 true，reason 填入該項目屬於哪個類型（報告事項/討論事項/臨時動議）。
-3. 兩個陣列都盡量完整，不要遺漏任何項目。`;
+擷取規則（嚴格遵守）：
+1. managedItems：找出「追蹤辦理情形」欄位中，勾選「☑繼續列管」的所有項目，isManaged 設為 true。
+2. newItems：把「肆、報告事項」「伍、討論事項」「陸、臨時動議」中的所有案件全部列入，一個都不漏，needsManagement 全部設為 true，reason 填報告事項/討論事項/臨時動議。
+3. content 要完整，不要省略。`
   if(file.name.toLowerCase().endsWith(".pdf")){
     const b64=await fileToBase64(file);
     const res=await fetch(API,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:1000,messages:[{role:"user",content:[{type:"document",source:{type:"base64",media_type:"application/pdf",data:b64}},{type:"text",text:prompt}]}]})});
@@ -358,7 +357,7 @@ function UploadZone({onFile,label,sub,fileRef,accept=".pdf,.docx"}) {
 }
 
 
-function PersistSection({ title, sectionKey, columns, defaultRow, renderRow, onDataChange }) {
+function PersistSection({ title, sectionKey, columns, defaultRow, initialData, onDataChange }) {
   const [rows, setRows] = useState([]);
   const [loaded, setLoaded] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -366,8 +365,10 @@ function PersistSection({ title, sectionKey, columns, defaultRow, renderRow, onD
 
   useEffect(() => {
     loadSectionData(sectionKey).then(data => {
-      if (data && Array.isArray(data)) {
-        setRows(data.map(r => ({ ...r, _keep: r._keep !== false })));
+      if (data && Array.isArray(data) && data.length > 0) {
+        setRows(data.map((r,i) => ({ ...r, _keep: r._keep !== false, _id: r._id || Date.now()+i })));
+      } else if (initialData && initialData.length > 0) {
+        setRows(initialData.map((r,i) => ({ ...r, _id: Date.now()+i })));
       } else {
         setRows([{ ...defaultRow, _keep: true, _id: Date.now() }]);
       }
@@ -569,6 +570,56 @@ const PRESCRIPTION_DAY_COLS = [
   {key:"location",label:"地點",placeholder:""},
 ];
 const PRESCRIPTION_DAY_DEFAULT = {time:"",section:"運動",courseName:"",instructor:"",location:""};
+const PRESCRIPTION_DAY_INITIAL = [
+  {time:"13:00-13:50",section:"社會",courseName:"健走小旅行戶外",instructor:"王明潔",location:"1樓穿堂集合",_keep:true},
+  {time:"14:00-14:50",section:"情緒調適",courseName:"雪花綻放",instructor:"李佳靜",location:"105教室",_keep:true},
+  {time:"15:00-15:50",section:"運動",courseName:"肌力訓練與基礎有氧",instructor:"陳虢叡",location:"503教室",_keep:true},
+  {time:"15:00-15:50",section:"社會",courseName:"嫩芽愛健康春日五色時蔬",instructor:"侯務葵",location:"202教室",_keep:true},
+  {time:"16:00-16:50",section:"運動",courseName:"功能性雙重任務訓練與樂活有氧",instructor:"陳虢叡",location:"503教室",_keep:true},
+  {time:"16:00-16:50",section:"情緒調適",courseName:"葉子拓印陶盤",instructor:"李佳靜",location:"105教室",_keep:true},
+];
+
+const UNINSTRUCTED_INITIAL = [
+  {name:"李芳玲",type:"運動",title:"社大講師",unit:"北投社大",plannedCourse:"",_keep:true},
+  {name:"林秋琴",type:"運動",title:"講師",unit:"北投社大",plannedCourse:"雙杖在手健康跟著走",_keep:true},
+  {name:"施伊芳",type:"運動",title:"講師",unit:"北投社大",plannedCourse:"",_keep:true},
+  {name:"張朝欽",type:"情緒調適",title:"講師",unit:"北投社大",plannedCourse:"",_keep:true},
+  {name:"溫淑玲",type:"情緒調適",title:"合唱團指導老師",unit:"北投社大",plannedCourse:"國台客語老歌歡唱",_keep:true},
+  {name:"陳亞寧",type:"其他",title:"教師",unit:"北投社大",plannedCourse:"",_keep:true},
+  {name:"馬靖超",type:"其他",title:"醫師",unit:"三總北投分院",plannedCourse:"",_keep:true},
+  {name:"張冠文",type:"運動",title:"銀髮族體適能教練",unit:"北區社區培力基地",plannedCourse:"",_keep:true},
+  {name:"曾禹寰",type:"社會",title:"社區專員",unit:"北區社區培力基地",plannedCourse:"",_keep:true},
+  {name:"戴旭志",type:"運動",title:"文化大學教授",unit:"戴旭志教授團隊",plannedCourse:"太極有氧，創意健走",_keep:true},
+  {name:"劉昂學",type:"運動",title:"體適能教練",unit:"戴旭志教授團隊",plannedCourse:"肌不可失",_keep:true},
+  {name:"陳泓穎",type:"情緒調適",title:"桌遊帶領員",unit:"琴茹組長",plannedCourse:"桌遊課程",_keep:true},
+  {name:"蕭永嘉",type:"情緒調適",title:"芳療師",unit:"琴茹組長",plannedCourse:"芳療生活運用；芳香手作",_keep:true},
+];
+
+const VENUE_INITIAL = [
+  {name:"淳覺植饌咖啡坊",rent:"1,500元/時",size:"可容納15人",equipment:"40吋電視螢幕，可用筆電接HDMI線",note:"可開二聯式發票",_keep:true},
+  {name:"三總北投分院會議室",rent:"待詢問",size:"待詢問",equipment:"待詢問",note:"",_keep:true},
+];
+
+const POTENTIAL_COURSE_INITIAL = [
+  {name:"太極有氧，創意健走",instructor:"戴旭志",type:"運動處方",status:"評估中",note:"戴旭志教授團隊",_keep:true},
+  {name:"肌不可失",instructor:"劉昂學",type:"運動處方",status:"可直接開課",note:"",_keep:true},
+  {name:"桌遊課程",instructor:"陳泓穎",type:"情緒調適",status:"評估中",note:"",_keep:true},
+  {name:"芳療生活運用；芳香手作",instructor:"蕭永嘉",type:"情緒調適",status:"評估中",note:"",_keep:true},
+  {name:"雙杖在手健康跟著走",instructor:"林秋琴",type:"運動處方",status:"評估中",note:"",_keep:true},
+  {name:"國台客語老歌歡唱",instructor:"溫淑玲",type:"情緒調適",status:"評估中",note:"",_keep:true},
+];
+
+const SCHEDULE_INITIAL = [
+  {date:"04月02日(三)14:00",name:"合作師資說明會",location:"待安排",_keep:true},
+  {date:"04月10日(四)",name:"中山士林北投診所說明會",location:"待安排",_keep:true},
+];
+
+const VISIT_INITIAL = [
+  {date:"03月06日(五)15:00",unit:"台北市中山區健康服務中心",status:"已完成",_keep:true},
+  {date:"03月25日(三)10:20",unit:"中山社區大學",status:"未完成",_keep:true},
+  {date:"03月25日(三)14:30",unit:"士林社區大學",status:"未完成",_keep:true},
+  {date:"03月25日(三)16:00",unit:"北投社區大學",status:"未完成",_keep:true},
+];
 
 const UNINSTRUCTED_COLS = [
   {key:"name",label:"姓名",placeholder:""},
@@ -693,36 +744,39 @@ function buildWordHTML(info, prescStats, clinics, tracked, proposals, sectionDat
   return `<!DOCTYPE html>
 <html lang="zh-TW"><head><meta charset="UTF-8">
 <style>
-@page { size: A4; margin: 2.5cm 3cm 2.5cm 3cm; }
-body { font-family: "標楷體","DFKai-SB","BiauKai",serif; font-size: 12pt; line-height: 2.0; color: #000; margin: 0; }
-h1 { font-size: 14pt; text-align: center; font-weight: bold; margin: 0; line-height: 2.0; }
-h2 { font-size: 13pt; font-weight: bold; margin: 14pt 0 0; text-indent: 0; }
-h3 { font-size: 12pt; font-weight: normal; margin: 4pt 0 2pt; text-indent: 2em; }
-p { margin: 0; line-height: 2.0; }
+@page { size: A4; margin: 2.5cm 2.5cm 2cm 3cm; }
+body { font-family: "標楷體","DFKai-SB","BiauKai",serif; font-size: 12pt; line-height: 1.8; color: #000; margin: 0; }
+h1 { font-size: 16pt; text-align: center; font-weight: bold; margin: 0 0 2pt 0; line-height: 1.8; letter-spacing: 2pt; }
+h2 { font-size: 14pt; font-weight: bold; margin: 16pt 0 4pt 0; }
+h3 { font-size: 12pt; font-weight: bold; margin: 10pt 0 2pt 2em; }
+p { margin: 2pt 0; line-height: 1.8; }
 .ctr { text-align: center; }
-.i1 { text-indent: 2em; }
-.i2 { text-indent: 4em; }
-hr { border: none; border-top: 1.5pt solid #000; margin: 8pt 0; }
-.track { border: 1pt solid #aaa; padding: 4pt 8pt; margin: 4pt 2em; }
-.track p { line-height: 1.8; font-size: 11pt; }
-.proposal { margin: 6pt 0 6pt 2em; }
-.proposal p { line-height: 1.8; }
-.dt1 { width: 100%; border: none; border-collapse: collapse; }
-.dt1 td { border: none; vertical-align: top; padding: 0 4pt; font-size: 11pt; line-height: 1.8; }
+.i1 { margin-left: 2em; }
+.i2 { margin-left: 4em; }
+hr { border: none; border-top: 2pt solid #000; margin: 10pt 0 8pt; }
+.sep { border: none; border-top: 0.5pt solid #888; margin: 6pt 0; }
+.track { border: 0.5pt solid #888; padding: 5pt 8pt; margin: 4pt 0 4pt 2em; page-break-inside: avoid; }
+.track p { line-height: 1.8; font-size: 11.5pt; margin: 1pt 0; }
+.proposal { margin: 8pt 0 8pt 2em; page-break-inside: avoid; }
+.proposal p { line-height: 1.8; margin: 1pt 0; }
+.dt1 { width: 100%; border: none; border-collapse: collapse; margin: 2pt 0; }
+.dt1 td { border: none; vertical-align: top; padding: 0 4pt 0 0; font-size: 11.5pt; line-height: 1.8; }
 .dl { white-space: nowrap; font-weight: bold; width: 5em; }
-.dt2 { width: 100%; border-collapse: collapse; font-size: 10pt; margin: 4pt 2em 6pt; width: calc(100% - 2em); }
-.dt2 td, .dt2 th { border: 0.5pt solid #888; padding: 2pt 5pt; vertical-align: middle; line-height: 1.6; }
-.hdr th { background: #2c2416; color: #fff; text-align: center; font-weight: bold; }
-.tot { background: #f5f0e8; font-weight: bold; }
-.grp { text-align: center; font-weight: bold; background: #f5f0e8; }
+.dec { min-height: 24pt; }
+.dt2 { width: calc(100% - 2em); border-collapse: collapse; font-size: 10.5pt; margin: 4pt 2em 8pt; }
+.dt2 td, .dt2 th { border: 0.5pt solid #000; padding: 3pt 6pt; vertical-align: middle; line-height: 1.6; }
+.hdr th { background: #1e1a12; color: #fff; text-align: center; font-weight: bold; font-size: 10.5pt; }
+.tot { background: #f0ece0; font-weight: bold; }
+.grp { text-align: center; font-weight: bold; background: #f0ece0; writing-mode: horizontal-tb; }
 .c { text-align: center; }
 .b { font-weight: bold; }
-.sm { font-size: 9pt; }
+.sm { font-size: 9.5pt; }
+.wt { width: 100%; }
 </style></head><body>
-<h1>${info.org}</h1>
-<h1>${info.subtitle}</h1>
-<h1>${info.meetingNo}內部工作會議${info.theme?`：${info.theme}`:""}　會議議程</h1>
-<p class="ctr">時間：${info.date}（星期${info.weekday}）${info.time}</p>
+<p class="ctr" style="font-size:14pt;font-weight:bold;letter-spacing:2pt">${info.org}</p>
+<p class="ctr" style="font-size:13pt;font-weight:bold;letter-spacing:1pt">${info.subtitle}</p>
+<p class="ctr" style="font-size:14pt;font-weight:bold;margin-top:4pt">${info.meetingNo}內部工作會議${info.theme?`：${info.theme}`:""}　會議議程</p>
+<p class="ctr" style="margin-top:6pt">時間：${info.date}（星期${info.weekday}）${info.time}</p>
 <p class="ctr">地點：${info.location}</p>
 <p class="ctr">主席：${info.chair}</p>
 <hr/>
@@ -735,6 +789,7 @@ ${clinicHTML}
 <h3>三、目前課程開設現況</h3>
 ${courseHTML}
 <h3>四、本月份健康處方課程表</h3>
+<p class="i1 i2">（詳見附件）</p>
 <h3>五、處方活動日課程表</h3>
 ${pdHTML}
 <h3>六、曾參與說明會但未開課教師名單</h3>
@@ -746,6 +801,7 @@ ${potHTML}
 <h3>九、未成功開課及可直接開課之課程列表</h3>
 ${potHTML}
 <h2>參、確認歷次健康台灣深耕計畫會議紀錄暨決議辦理情形</h2>
+<p class="i1" style="font-size:10.5pt;color:#555">一、健康台灣深耕計畫-臺北市慢性病防治全人健康智慧整合照護計畫歷次會議如下表：</p>
 ${trackBlock}
 <h2>肆、報告事項</h2>
 <h3>一、請各位同仁報告上週工作內容及未來一週工作規劃，報告內容如下表：</h3>
@@ -813,7 +869,7 @@ function App() {
 
   const handleMinutes=async(file)=>{
     if(!file)return;setErr("");setLoading("解析會議紀錄…");
-    try{const data=await extractMinutes(file);setManaged((data?.managedItems||[]).filter(i=>i.isManaged).map(i=>({...i,include:true,mode:"decision",customText:""})));setSuggested((data?.newItems||[]).filter(i=>i.needsManagement).map(i=>({...i,include:true,mode:"decision",customText:""})));setMinutesName(file.name);setStep(1);}
+    try{const data=await extractMinutes(file);setManaged((data?.managedItems||[]).filter(i=>i.isManaged).map(i=>({...i,include:true,mode:"decision",customText:""})));setSuggested((data?.newItems||[]).filter(i=>i.needsManagement).map(i=>({...i,include:false,mode:"decision",customText:""})));setMinutesName(file.name);setStep(1);}
     catch(e){setErr("解析失敗："+e.message);}setLoading("");
   };
   const handleExcel=async(file)=>{
@@ -953,24 +1009,24 @@ function App() {
 
             {/* 五至九 */}
             <div style={S.card}><div style={S.ch("#2e5d2e")}>④ 處方活動日課程表（可延續上次資料）</div><div style={S.cb}>
-              <PersistSection title="處方活動日課程表" sectionKey="prescriptionDayCourses" columns={PRESCRIPTION_DAY_COLS} defaultRow={PRESCRIPTION_DAY_DEFAULT} onDataChange={data=>updateSection("prescriptionDayCourses",data)}/>
+              <PersistSection title="處方活動日課程表" sectionKey="prescriptionDayCourses" columns={PRESCRIPTION_DAY_COLS} defaultRow={PRESCRIPTION_DAY_DEFAULT} initialData={PRESCRIPTION_DAY_INITIAL} onDataChange={data=>updateSection("prescriptionDayCourses",data)}/>
             </div></div>
 
             <div style={S.card}><div style={S.ch("#2e5d2e")}>⑤ 曾參與說明會但未開課教師名單（可延續上次資料）</div><div style={S.cb}>
-              <PersistSection title="未開課師資" sectionKey="uninstructed" columns={UNINSTRUCTED_COLS} defaultRow={UNINSTRUCTED_DEFAULT} onDataChange={data=>updateSection("uninstructed",data)}/>
+              <PersistSection title="未開課師資" sectionKey="uninstructed" columns={UNINSTRUCTED_COLS} defaultRow={UNINSTRUCTED_DEFAULT} initialData={UNINSTRUCTED_INITIAL} onDataChange={data=>updateSection("uninstructed",data)}/>
             </div></div>
 
             <div style={S.card}><div style={S.ch("#2e5d2e")}>⑥ 潛在場地列表（可延續上次資料）</div><div style={S.cb}>
-              <PersistSection title="潛在場地" sectionKey="venues" columns={VENUE_COLS} defaultRow={VENUE_DEFAULT} onDataChange={data=>updateSection("venues",data)}/>
+              <PersistSection title="潛在場地" sectionKey="venues" columns={VENUE_COLS} defaultRow={VENUE_DEFAULT} initialData={VENUE_INITIAL} onDataChange={data=>updateSection("venues",data)}/>
             </div></div>
 
             <div style={S.card}><div style={S.ch("#2e5d2e")}>⑦⑧ 潛在課程及師資／未成功開課課程（可延續上次資料）</div><div style={S.cb}>
-              <PersistSection title="潛在課程" sectionKey="potentialCourses" columns={POTENTIAL_COURSE_COLS} defaultRow={POTENTIAL_COURSE_DEFAULT} onDataChange={data=>updateSection("potentialCourses",data)}/>
+              <PersistSection title="潛在課程" sectionKey="potentialCourses" columns={POTENTIAL_COURSE_COLS} defaultRow={POTENTIAL_COURSE_DEFAULT} initialData={POTENTIAL_COURSE_INITIAL} onDataChange={data=>updateSection("potentialCourses",data)}/>
             </div></div>
 
             {/* 時程表 */}
             <div style={S.card}><div style={S.ch("#2e5d2e")}>⑨ 重要會議及活動時程（可延續上次資料）</div><div style={S.cb}>
-              <PersistSection title="重要時程" sectionKey="schedules" columns={SCHEDULE_COLS} defaultRow={SCHEDULE_DEFAULT} onDataChange={data=>updateSection("schedules",data)}/>
+              <PersistSection title="重要時程" sectionKey="schedules" columns={SCHEDULE_COLS} defaultRow={SCHEDULE_DEFAULT} initialData={SCHEDULE_INITIAL} onDataChange={data=>updateSection("schedules",data)}/>
             </div></div>
 
             <div style={S.card}><div style={S.ch("#2e5d2e")}>⑩ 拜會處方執行相關單位時程（可延續上次資料）</div><div style={S.cb}>
@@ -982,13 +1038,42 @@ function App() {
 
                     {/* S3 */}
           {step===3&&<>
-            {managed.length>0&&<div style={S.card}><div style={S.ch()}>📌 繼續列管事項</div><div style={S.cb}>{managed.map((item,i)=><TrackedCard key={item.id||i} item={item} index={i} onChange={updateManaged}/>)}</div></div>}
-            {suggested.length>0&&<div style={S.card}><div style={S.ch("#2e5d9a")}>🔔 建議列管事項（AI 判斷）</div><div style={S.cb}>{suggested.map((item,i)=><TrackedCard key={item.id||i} item={item} index={i} onChange={updateSuggested}/>)}</div></div>}
-            {managed.length===0&&suggested.length===0&&<div style={S.card}><div style={S.cb}><div style={{color:C.muted,textAlign:"center",padding:14}}>未解析到需列管事項，可直接繼續。</div></div></div>}
-            <div style={{display:"flex",gap:10}}><button style={S.btnO} onClick={()=>setStep(2)}>← 上一步</button><button style={S.btn} onClick={()=>setStep(4)}>下一步：加入提案 →</button></div>
+            {managed.length>0&&(
+              <div style={S.card}>
+                <div style={S.ch()}>📌 前次已勾「繼續列管」的事項</div>
+                <div style={S.cb}>
+                  <div style={{fontSize:12,color:C.muted,marginBottom:10}}>
+                    上次會議紀錄中勾選「☑繼續列管」的項目，請勾選要帶入本次議程的。
+                  </div>
+                  {managed.map((item,i)=><TrackedCard key={item.id||i} item={item} index={i} onChange={updateManaged}/>)}
+                </div>
+              </div>
+            )}
+            {suggested.length>0&&(
+              <div style={S.card}>
+                <div style={S.ch("#2e5d9a")}>📋 本次會議所有事項（請手動勾選要列管的）</div>
+                <div style={S.cb}>
+                  <div style={{fontSize:12,color:C.muted,marginBottom:10}}>
+                    以下是本次會議的報告事項、討論事項、臨時動議，<strong>請自行勾選</strong>哪些要帶入下次議程追蹤。預設全部<strong>未勾選</strong>。
+                  </div>
+                  {suggested.map((item,i)=><TrackedCard key={item.id||i} item={item} index={i} onChange={updateSuggested}/>)}
+                </div>
+              </div>
+            )}
+            {managed.length===0&&suggested.length===0&&(
+              <div style={S.card}><div style={S.cb}>
+                <div style={{color:C.muted,textAlign:"center",padding:14}}>
+                  未解析到任何事項。請確認步驟一已上傳會議紀錄，或直接繼續。
+                </div>
+              </div></div>
+            )}
+            <div style={{display:"flex",gap:10}}>
+              <button style={S.btnO} onClick={()=>setStep(2)}>← 上一步</button>
+              <button style={S.btn} onClick={()=>setStep(4)}>下一步：加入提案 →</button>
+            </div>
           </>}
 
-          {/* S4 */}
+                    {/* S4 */}
           {step===4&&<>
             <div style={S.card}><div style={S.ch("#4a1a7a")}>📋 步驟五　提案整合</div><div style={S.cb}>
               <div style={{background:"#f0eaf8",border:"1px solid #b39ddb",borderRadius:2,padding:"14px 16px",marginBottom:16}}>
