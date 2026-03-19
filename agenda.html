@@ -150,6 +150,30 @@ const S={
   row:{display:"flex",gap:12},
 };
 
+
+function ImeInput({value, onChange, placeholder, type="text", style: sx}) {
+  const ref = React.useRef(null);
+  const composing = React.useRef(false);
+  React.useEffect(() => { if (ref.current && document.activeElement !== ref.current) ref.current.value = value||""; }, [value]);
+  return <input ref={ref} type={type} defaultValue={value||""} placeholder={placeholder}
+    style={sx}
+    onCompositionStart={() => composing.current = true}
+    onCompositionEnd={e => { composing.current = false; onChange(e.target.value); }}
+    onChange={e => { if (!composing.current) onChange(e.target.value); }}
+  />;
+}
+function ImeTarea({value, onChange, placeholder, rows=5, style: sx}) {
+  const ref = React.useRef(null);
+  const composing = React.useRef(false);
+  React.useEffect(() => { if (ref.current && document.activeElement !== ref.current) ref.current.value = value||""; }, [value]);
+  return <textarea ref={ref} defaultValue={value||""} placeholder={placeholder} rows={rows}
+    style={sx}
+    onCompositionStart={() => composing.current = true}
+    onCompositionEnd={e => { composing.current = false; onChange(e.target.value); }}
+    onChange={e => { if (!composing.current) onChange(e.target.value); }}
+  />;
+}
+
 function UploadZone({onFile,label,sub,fileRef,accept=".pdf,.docx"}) {
   return <div style={S.drop} onDragOver={e=>e.preventDefault()} onDrop={e=>{e.preventDefault();onFile(e.dataTransfer.files[0]);}} onClick={()=>fileRef?.current?.click()}>
     <div style={{fontSize:28,marginBottom:6}}>📎</div>
@@ -178,7 +202,7 @@ function TrackedCard({item,index,onChange}) {
           </label>
         ))}
       </div>
-      {item.mode==="custom"&&<><textarea style={S.ta} value={item.customText||""} placeholder="請輸入辦理情形說明（口語也可以）" onChange={e=>onChange(index,{...item,customText:e.target.value})}/><button style={{...S.btnS(),marginTop:5}} onClick={handlePolish} disabled={polishing}>{polishing?"整理中…":"✦ AI 整理成公文格式"}</button></>}
+      {item.mode==="custom"&&<><ImeTarea style={S.ta} value={item.customText||""} placeholder="請輸入辦理情形說明（口語也可以）" onChange={v=>onChange(index,{...item,customText:v})}/><button style={{...S.btnS(),marginTop:5}} onClick={handlePolish} disabled={polishing}>{polishing?"整理中…":"✦ AI 整理成公文格式"}</button></>}
       {item.mode==="decision"&&<div style={{fontSize:11,color:"#999",fontStyle:"italic"}}>顯示為「依決議辦理。」</div>}
     </>}
   </div>;
@@ -207,14 +231,14 @@ function ProposalCard({prop,index,onChange,onRemove}) {
 function AgendaForm({info,onChange}) {
   const F=({label,k,flex,ph})=><div style={{flex:flex||1}}>
     <div style={S.lbl}>{label}</div>
-    <input style={S.inp} value={info[k]} placeholder={ph} onChange={e=>onChange({...info,[k]:e.target.value})}/>
+    <ImeInput style={S.inp} value={info[k]||""} placeholder={ph} onChange={v=>onChange({...info,[k]:v})}/>
   </div>;
   return <div style={S.cb}>
     <div style={S.row}><F label="機構名稱" k="org" flex={2}/><F label="副標題" k="subtitle" flex={2}/></div>
     <div style={{...S.row,marginTop:10}}><F label="第幾次會議" k="meetingNo" ph="第十八次"/><F label="會議主題" k="theme" flex={2} ph="統整近期工作進度與後續執行方向"/></div>
     <div style={{...S.row,marginTop:10}}><F label="日期（民國）" k="date" ph="115年04月02日"/><F label="星期" k="weekday" ph="三"/><F label="時間" k="time" ph="14：00"/></div>
     <div style={{...S.row,marginTop:10}}><F label="地點" k="location" flex={2}/><F label="主席" k="chair"/></div>
-    <div style={{marginTop:10}}><div style={S.lbl}>統計截止日期（顯示於表格標題）</div><input style={{...S.inp,maxWidth:280}} value={info.dataDate||""} placeholder="例：3/19 健康處方管理系統" onChange={e=>onChange({...info,dataDate:e.target.value})}/></div>
+    <div style={{marginTop:10}}><div style={S.lbl}>統計截止日期（顯示於表格標題）</div><ImeInput style={{...S.inp,maxWidth:280}} value={info.dataDate||""} placeholder="例：3/19 健康處方管理系統" onChange={v=>onChange({...info,dataDate:v})}/></div>
   </div>;
 }
 

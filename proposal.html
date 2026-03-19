@@ -145,17 +145,41 @@ function Btn({children,onClick,variant="primary",disabled,style:ex}) {
   return <button onClick={onClick} disabled={disabled}
     style={{padding:"8px 20px",fontSize:13,borderRadius:2,cursor:disabled?"not-allowed":"pointer",opacity:disabled?.5:1,...v[variant],...ex}}>{children}</button>;
 }
+
+function ImeInput({value, onChange, placeholder, type="text", style: sx}) {
+  const ref = React.useRef(null);
+  const composing = React.useRef(false);
+  React.useEffect(() => { if (ref.current && document.activeElement !== ref.current) ref.current.value = value||""; }, [value]);
+  return <input ref={ref} type={type} defaultValue={value||""} placeholder={placeholder}
+    style={sx}
+    onCompositionStart={() => composing.current = true}
+    onCompositionEnd={e => { composing.current = false; onChange(e.target.value); }}
+    onChange={e => { if (!composing.current) onChange(e.target.value); }}
+  />;
+}
+function ImeTarea({value, onChange, placeholder, rows=5, style: sx}) {
+  const ref = React.useRef(null);
+  const composing = React.useRef(false);
+  React.useEffect(() => { if (ref.current && document.activeElement !== ref.current) ref.current.value = value||""; }, [value]);
+  return <textarea ref={ref} defaultValue={value||""} placeholder={placeholder} rows={rows}
+    style={sx}
+    onCompositionStart={() => composing.current = true}
+    onCompositionEnd={e => { composing.current = false; onChange(e.target.value); }}
+    onChange={e => { if (!composing.current) onChange(e.target.value); }}
+  />;
+}
+
 function Inp({label,value,onChange,placeholder,type="text"}) {
   return <div style={{marginBottom:12}}>
     {label && <div style={{fontSize:11,color:C.muted,fontWeight:700,marginBottom:4}}>{label}</div>}
-    <input type={type} value={value} placeholder={placeholder} onChange={e=>onChange(e.target.value)}
+    <ImeInput type={type} value={value} placeholder={placeholder} onChange={onChange}
       style={{width:"100%",border:`1px solid ${C.border}`,padding:"8px 11px",fontSize:13,borderRadius:2,background:C.cream}}/>
   </div>;
 }
 function Txtarea({label,value,onChange,placeholder,rows=5}) {
   return <div style={{marginBottom:12}}>
     {label && <div style={{fontSize:11,color:C.muted,fontWeight:700,marginBottom:4}}>{label}</div>}
-    <textarea value={value} placeholder={placeholder} rows={rows} onChange={e=>onChange(e.target.value)}
+    <ImeTarea value={value} placeholder={placeholder} rows={rows} onChange={onChange}
       style={{width:"100%",border:`1px solid ${C.border}`,padding:"8px 11px",fontSize:13,borderRadius:2,background:C.cream,resize:"vertical"}}/>
   </div>;
 }
