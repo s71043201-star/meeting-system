@@ -151,27 +151,47 @@ const S={
 };
 
 
+
 function ImeInput({value, onChange, placeholder, type="text", style: sx}) {
-  const [local, setLocal] = React.useState(value||"");
+  const ref = React.useRef(null);
   const composing = React.useRef(false);
-  // sync from parent only when not focused
-  const focused = React.useRef(false);
+  // Only set value from outside when not focused
   React.useEffect(() => {
-    if (!focused.current) setLocal(value||"");
+    if (ref.current && ref.current !== document.activeElement) {
+      ref.current.value = value || "";
+    }
   }, [value]);
   return <input
+    ref={ref}
     type={type}
-    value={local}
+    defaultValue={value||""}
     placeholder={placeholder}
     style={sx}
-    onFocus={() => focused.current = true}
-    onBlur={e => { focused.current = false; onChange(e.target.value); }}
-    onCompositionStart={() => composing.current = true}
-    onCompositionEnd={e => { composing.current = false; setLocal(e.target.value); onChange(e.target.value); }}
-    onChange={e => { setLocal(e.target.value); if (!composing.current) onChange(e.target.value); }}
+    onCompositionStart={() => { composing.current = true; }}
+    onCompositionEnd={e => { composing.current = false; onChange(e.target.value); }}
+    onInput={e => { if (!composing.current) onChange(e.target.value); }}
   />;
 }
 function ImeTarea({value, onChange, placeholder, rows=5, style: sx}) {
+  const ref = React.useRef(null);
+  const composing = React.useRef(false);
+  React.useEffect(() => {
+    if (ref.current && ref.current !== document.activeElement) {
+      ref.current.value = value || "";
+    }
+  }, [value]);
+  return <textarea
+    ref={ref}
+    defaultValue={value||""}
+    placeholder={placeholder}
+    rows={rows}
+    style={sx}
+    onCompositionStart={() => { composing.current = true; }}
+    onCompositionEnd={e => { composing.current = false; onChange(e.target.value); }}
+    onInput={e => { if (!composing.current) onChange(e.target.value); }}
+  />;
+}
+) {
   const [local, setLocal] = React.useState(value||"");
   const composing = React.useRef(false);
   const focused = React.useRef(false);
