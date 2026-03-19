@@ -1422,7 +1422,7 @@ ${urg.length===0?"<p class='i1'>（無）</p>":propBlock(urg,true)}
 }
 
 
-const STEPS=["上傳紀錄","列管事項確認"];
+const STEPS=["列管事項確認"];
 
 // ── 會次選單 ──────────────────────────────────────────────────────
 const MEETING_NUMS = ["第一次","第二次","第三次","第四次","第五次","第六次","第七次","第八次","第九次","第十次","第十一次","第十二次","第十三次","第十四次","第十五次","第十六次","第十七次","第十八次","第十九次","第二十次"];
@@ -1459,11 +1459,14 @@ function SourceSelector({ value, onChange }) {
 }
 
 function TrackedItemRow({ item, index, isManaged, onUpdate, onRemove }) {
-  const [polishing, setPolishing] = useState(false);
+  const polishing = useRef(false);
+  const [polishLabel, setPolishLabel] = useState("✦ AI 整理成公文格式");
 
   const handlePolish = async () => {
     if (!item.customText?.trim()) return;
-    setPolishing(true);
+    if (polishing.current) return;
+    polishing.current = true;
+    setPolishLabel("整理中…");
     try {
       const res = await fetch(API, {
         method:"POST", headers:{"Content-Type":"application/json"},
@@ -1476,8 +1479,10 @@ function TrackedItemRow({ item, index, isManaged, onUpdate, onRemove }) {
       const d = await res.json();
       const polished = d.content?.[0]?.text || item.customText;
       onUpdate({ customText: polished });
-    } catch(e) { alert("整理失敗："+e.message); }
-    setPolishing(false);
+      setPolishLabel("✓ 整理完成");
+      setTimeout(()=>setPolishLabel("✦ AI 整理成公文格式"), 2000);
+    } catch(e) { alert("整理失敗："+e.message); setPolishLabel("✦ AI 整理成公文格式"); }
+    polishing.current = false;
   };
 
   const inp = { width:"100%", border:`1px solid ${C.border}`, padding:"5px 7px", fontSize:12, background:C.cream, fontFamily:"inherit", borderRadius:1 };
@@ -1532,8 +1537,8 @@ function TrackedItemRow({ item, index, isManaged, onUpdate, onRemove }) {
               <textarea style={{ ...inp, resize:"vertical", minHeight:56, marginBottom:6 }}
                 value={item.customText||""} onChange={e=>onUpdate({customText:e.target.value})}
                 placeholder="口語輸入即可，可按下方按鈕整理成公文格式"/>
-              <button style={{ ...S.btnS(C.gold), fontSize:11 }} onClick={handlePolish} disabled={polishing}>
-                {polishing?"整理中…":"✦ AI 整理成公文格式"}
+              <button style={{ ...S.btnS(C.gold), fontSize:11 }} onClick={handlePolish} disabled={polishLabel==="整理中…"}>
+                {polishLabel}
               </button>
             </div>
           )}
@@ -1550,6 +1555,7 @@ function App() {
   const [err, setErr] = useState("");
   const [minutesName, setMinutesName] = useState("");
   const [generated, setGenerated] = useState(false);
+  const [summaryLoading, setSummaryLoading] = useState("");
   const [archives, setArchives] = useState([]);
   const [archiveLoading, setArchiveLoading] = useState(false);
   const [managed, setManaged] = useState([]);
@@ -1584,7 +1590,7 @@ function App() {
       const s = (data?.newItems||[]).filter(i=>i.needsManagement).map(i=>({...i,include:false,mode:"decision",customText:""}));
       setManaged(m); setSuggested(s); setMinutesName(file.name);
     } catch(e) { setErr("解析失敗："+e.message); }
-    setLoading(""); setStep(1);
+    setLoading("");
   };
 
   const handleGenerate = async () => {
@@ -1599,6 +1605,53 @@ function App() {
       );
       setGenerated(true);
     } catch(e) { setErr("下載失敗："+e.message); }
+  };
+
+  const handleSummary = async () => {
+    const tracked = allItems.filter(i=>i.include!==false);
+    if (!tracked.length) { alert("沒有繼續列管的事項"); return; }
+    setSummaryLoading("AI 生成摘要中…");
+    try {
+      // Ask AI to write a formal summary for each item
+      const itemsText = tracked.map((item,i) => 
+        `第${i+1}項：${item.source} ${item.caseTitle}\n決議：${item.content}\n辦理情形：${item.mode==="decision"?"依決議辦理。":(item.customText?.trim()||"（待填寫）")}`
+      ).join("\n\n");
+      
+      const res = await fetch(API, {
+        method:"POST", headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({
+          model:"claude-sonnet-4-20250514", max_tokens:4000,
+          system:"你是擅長撰寫公文的秘書。請將以下列管事項整理成正式公文格式的摘要，每項獨立呈現，語氣簡潔條理清晰，繁體中文。",
+          messages:[{role:"user", content:`請為以下列管事項，各自寫出一段正式公文格式的辦理情形摘要（2-4句話）：\n\n${itemsText}`}]
+        })
+      });
+      const d = await res.json();
+      const summaryText = d.content?.[0]?.text || "";
+
+      // Build a simple docx with the summaries
+      if (!initDocx()) throw new Error("docx 程式庫未載入");
+      const { Document, Packer, Paragraph, TextRun } = window.docx;
+      const KAI = "標楷體";
+      const children = [
+        new Paragraph({ children:[new TextRun({text:"列管事項辦理情形摘要",font:KAI,size:28,bold:true})], spacing:{after:200} }),
+        ...tracked.map((item,i) => [
+          new Paragraph({ children:[new TextRun({text:`${i+1}. 【${item.source}】${item.caseTitle}`,font:KAI,size:24,bold:true})], spacing:{before:160,after:60} }),
+          new Paragraph({ children:[new TextRun({text:`決議事項：${item.content}`,font:KAI,size:24})], spacing:{after:40} }),
+          new Paragraph({ children:[new TextRun({text:`辦理情形：${item.mode==="decision"?"依決議辦理。":(item.customText?.trim()||"（待填寫）")}`,font:KAI,size:24})], spacing:{after:40} }),
+        ]).flat(),
+        new Paragraph({ spacing:{before:200}, children:[new TextRun({text:"── AI 生成摘要 ──",font:KAI,size:20,color:"888888"})] }),
+        new Paragraph({ children:[new TextRun({text:summaryText,font:KAI,size:22})], spacing:{before:80} }),
+      ];
+      const doc = new Document({
+        styles:{default:{document:{run:{font:KAI,size:24}}}},
+        sections:[{properties:{page:{size:{width:11906,height:16838},margin:{top:794,right:1418,bottom:623,left:1795}}},children}]
+      });
+      const blob = await Packer.toBlob(doc);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a"); a.href=url; a.download="列管事項辦理情形摘要.docx"; a.click();
+      URL.revokeObjectURL(url);
+    } catch(e) { alert("生成失敗："+e.message); }
+    setSummaryLoading("");
   };
 
   const Dot = ({n}) => (
@@ -1680,28 +1733,11 @@ function App() {
           {loading && <div style={S.prog}>⏳ {loading}</div>}
           {err && <div style={S.err}>⚠ {err}</div>}
 
-          {/* Step 0: Upload */}
+          {/* Step 0: Tracked items */}
           {step===0 && (
-            <div style={S.card}>
-              <div style={S.ch()}>步驟一　上傳前次會議紀錄（選填）</div>
-              <div style={S.cb}>
-                <div style={{ fontSize:13, color:C.muted, marginBottom:14, lineHeight:1.8 }}>
-                  上傳後系統會嘗試解析列管事項（不一定成功），也可以跳過直接手動填寫。
-                </div>
-                <UploadZone onFile={handleMinutes} fileRef={minutesRef} label="拖曳或點擊上傳會議紀錄" sub="支援 PDF、Word (.docx)"/>
-                {minutesName && <div style={{ fontSize:12, color:C.muted, marginTop:8 }}>✓ 已載入：{minutesName}</div>}
-                <div style={{ marginTop:14 }}>
-                  <button style={S.btn} onClick={()=>setStep(1)}>跳過，直接填寫列管事項 →</button>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* Step 1: Tracked items */}
-          {step===1 && (
             <div>
               <div style={S.card}>
-                <div style={S.ch()}>步驟二　列管事項確認</div>
+                <div style={S.ch()}>列管事項確認</div>
                 <div style={S.cb}>
                   <div style={{ fontSize:13, color:C.muted, marginBottom:16, lineHeight:1.8 }}>
                     請對照上次會議紀錄，逐筆填入需要追蹤的列管事項。選擇繼續或解除列管，並填寫本次辦理情形。
@@ -1733,7 +1769,7 @@ function App() {
               {generated && <div style={S.ok}>✓ 已下載！</div>}
 
               <div style={{ display:"flex", gap:10 }}>
-                <button style={S.btnO} onClick={()=>setStep(0)}>← 上一步</button>
+                
                 <button style={S.btn} onClick={handleGenerate}>⬇ 下載列管事項 .docx</button>
               </div>
             </div>
