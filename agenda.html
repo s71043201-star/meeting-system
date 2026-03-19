@@ -9,6 +9,8 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script>if(typeof pdfjsLib!=="undefined")pdfjsLib.GlobalWorkerOptions.workerSrc="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";</script>
 <script src="docx.js"></script>
 <script type="module">
   import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
@@ -602,6 +604,29 @@ async function fileToBase64(file) {
   return new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(r.result.split(",")[1]);r.onerror=rej;r.readAsDataURL(file);});
 }
 function parseJSON(t,fb){try{return JSON.parse(t.replace(/```json\n?|```/g,"").trim());}catch{return fb;}}
+// ── Extract text from PDF using pdf.js (no beta header needed) ──
+async function extractPdfText(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = async (e) => {
+      try {
+        const loadingTask = pdfjsLib.getDocument({ data: e.target.result });
+        const pdf = await loadingTask.promise;
+        let fullText = "";
+        for (let i = 1; i <= pdf.numPages; i++) {
+          const page = await pdf.getPage(i);
+          const content = await page.getTextContent();
+          const pageText = content.items.map(item => item.str).join(" ");
+          fullText += pageText + "\n";
+        }
+        resolve(fullText);
+      } catch(err) { reject(err); }
+    };
+    reader.onerror = reject;
+    reader.readAsArrayBuffer(file);
+  });
+}
+
 async function extractMinutes(file) {
   const prompt=`請從這份會議紀錄中擷取所有需要追蹤的事項，以 JSON 格式回傳，不要有其他文字：
 {
@@ -613,18 +638,27 @@ async function extractMinutes(file) {
   ]
 }
 擷取規則（嚴格遵守）：
-1. managedItems：找出「追蹤辦理情形」欄位中，勾選「☑繼續列管」的所有項目，isManaged 設為 true。
-2. newItems：把「肆、報告事項」「伍、討論事項」「陸、臨時動議」中的所有案件全部列入，一個都不漏，needsManagement 全部設為 true，reason 填報告事項/討論事項/臨時動議。
-3. content 要完整，不要省略。`
+1. managedItems：找出「追蹤辦理情形」或「115年X月X日會議追蹤辦理情形」欄位中，標記為「繼續列管」的項目（可能寫成「□解除列管繼續列管」「繼續列管」「☑繼續列管」等形式），isManaged 設為 true。
+2. newItems：把「肆、報告事項」「伍、討論事項」「陸、臨時動議」中的所有案件全部列入，一個都不漏，needsManagement 全部設為 true。
+3. source 格式為「第X次 臨時動議X」，caseTitle 是案由標題，content 是決議事項摘要（2-3句），status 是追蹤辦理情形摘要。
+4. content 要完整，不要省略。`
+  // Use text extraction for both PDF and docx to avoid needing beta headers
+  let raw = "";
   if(file.name.toLowerCase().endsWith(".pdf")){
-    const b64=await fileToBase64(file);
-    const res=await fetch(API,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:4000,messages:[{role:"user",content:[{type:"document",source:{type:"base64",media_type:"application/pdf",data:b64}},{type:"text",text:prompt}]}]})});
-    const d=await res.json(); return parseJSON(d.content?.[0]?.text??"{}",{managedItems:[],newItems:[]});
+    // Extract text from PDF using PDF.js via fetch trick - read as text
+    try {
+      raw = await extractPdfText(file);
+    } catch(e) {
+      // fallback: use document source with beta header
+      const b64=await fileToBase64(file);
+      const res=await fetch(API,{method:"POST",headers:{"Content-Type":"application/json","anthropic-beta":"pdfs-2024-09-25"},body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:4000,messages:[{role:"user",content:[{type:"document",source:{type:"base64",media_type:"application/pdf",data:b64}},{type:"text",text:prompt}]}]})});
+      const d=await res.json(); return parseJSON(d.content?.[0]?.text??"{}",{managedItems:[],newItems:[]});
+    }
   } else {
-    const raw=await docxToText(file);
-    const res=await fetch(API,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:4000,messages:[{role:"user",content:`${prompt}\n\n會議紀錄：\n\n${raw}`}]})});
-    const d=await res.json(); return parseJSON(d.content?.[0]?.text??"{}",{managedItems:[],newItems:[]});
+    raw = await docxToText(file);
   }
+  const res=await fetch(API,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:4000,messages:[{role:"user",content:`${prompt}\n\n會議紀錄全文：\n\n${raw.slice(0,12000)}`}]})});
+  const d=await res.json(); return parseJSON(d.content?.[0]?.text??"{}",{managedItems:[],newItems:[]});
 }
 async function extractProposal(file) {
   const prompt=`請從這份提案單中擷取所有提案，以 JSON 陣列回傳：[{"id":"p1","proposer":"提案人","caseTitle":"案由","description":"說明","suggestedSection":"討論事項或報告事項或臨時動議"}]`;
