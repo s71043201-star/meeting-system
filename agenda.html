@@ -34,7 +34,7 @@
 <div id="root"></div>
 <script type="text/babel" data-presets="react">
 const { useState, useEffect, useRef, useCallback } = React;
-const API = "https://api.anthropic.com/v1/messages";
+const API = "https://claude-proxy.s71043201.workers.dev";
 
 // ── Firebase ──────────────────────────────────────────────────
 const waitFB = () => new Promise(res => { if(window.firebaseReady) return res(); window.addEventListener("firebaseReady",res,{once:true}); });
