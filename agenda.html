@@ -9,6 +9,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"></script>
+<script src="https://unpkg.com/docx@8.5.0/build/index.js"></script>
 <script type="module">
   import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
   import { getDatabase, ref, get, set } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-database.js";
@@ -36,6 +37,494 @@
 <script type="text/babel" data-presets="react">
 const { useState, useEffect, useRef, useCallback } = React;
 const API = "https://claude-proxy.s71043201.workers.dev";
+
+// ══ DOCX GENERATOR ══════════════════════════════════════════
+// docx-js browser destructuring
+const {
+  Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell,
+  AlignmentType, BorderStyle, WidthType, ShadingType, VerticalAlign,
+  PageBreak, UnderlineType
+} = docx;
+
+// ── page layout (A4, DXA: 1440 = 1 inch, 567 = 1 cm) ──────────
+const PAGE_W   = 11906;                   // A4 width
+const ML       = 1795;                    // left  3.17 cm
+const MR       = 1418;                    // right 2.5  cm
+const MT       =  794;                    // top   1.4  cm
+const MB       =  623;                    // bottom 1.1 cm
+const BODY_W   = PAGE_W - ML - MR;       // 8693 usable text width
+const TABLE_W  = BODY_W + 600;            // tables wider by ~1cm each side
+
+const KAI = "標楷體";
+const PT  = n => n * 2;                   // half-points
+
+// ── borders ─────────────────────────────────────────────────────
+const bNone  = { style: BorderStyle.NONE,   size: 0, color: "FFFFFF" };
+const bThin  = { style: BorderStyle.SINGLE, size: 4, color: "000000" };
+const all    = b => ({ top:b, bottom:b, left:b, right:b });
+const noBdr  = all(bNone);
+const thinBdr = all(bThin);
+const hdrBdr  = all({ style: BorderStyle.SINGLE, size: 4, color: "4472C4" });
+
+// ── spacing: fixed 16 pt line, controllable before/after ────────
+const sp = (before=0, after=0) => ({ before, after, line: 320, lineRule: "exact" });
+
+// ── paragraph helpers ────────────────────────────────────────────
+const run = (text, size=12, bold=false, color=undefined) =>
+  new TextRun({ text, font: KAI, size: PT(size), bold, color });
+
+function para(text, opts={}) {
+  const { size=12, bold=false, align=AlignmentType.LEFT, indent=0, before=0, after=60, color } = opts;
+  return new Paragraph({
+    alignment: align,
+    spacing: sp(before, after),
+    indent: indent ? { left: indent } : undefined,
+    children: [run(text, size, bold, color)]
+  });
+}
+const ctrPara = (text, size=12, bold=false) => para(text, { size, bold, align: AlignmentType.CENTER });
+const h2Para  = text => para(text, { size: 14, bold: true, before: 200, after: 60 });
+const h3Para  = (text, indent=480) => para(text, { size: 12, indent, before: 120, after: 40 });
+const emptyP  = () => para("", { size: 12, after: 0 });
+
+// ── cell builder ─────────────────────────────────────────────────
+function cell(text, w, opts={}) {
+  const { bold=false, size=12, shade, borders=thinBdr, span, valign=VerticalAlign.CENTER, color } = opts;
+  const texts = Array.isArray(text) ? text : [text];
+  return new TableCell({
+    width: w ? { size: w, type: WidthType.DXA } : undefined,
+    borders,
+    shading: shade ? { fill: shade, type: ShadingType.CLEAR } : undefined,
+    verticalAlign: valign,
+    columnSpan: span,
+    margins: { top: 60, bottom: 60, left: 180, right: 180 },
+    children: texts.map(t => new Paragraph({
+      spacing: sp(30, 30),
+      children: [run(String(t||""), size, bold, color)]
+    }))
+  });
+}
+
+function hdrCell(text, w, span) {
+  return cell(text, w, {
+    bold: true, size: 12, shade: "BDD7EE", color: "1F3864",
+    borders: hdrBdr, span
+  });
+}
+
+// ── prescription stats ───────────────────────────────────────────
+function buildPrescTable(prescStats) {
+  if (!prescStats) return [para("（尚未上傳處方資料）", { indent: 480 })];
+  const diff = (a, b) => {
+    const c = parseFloat(a), p = parseFloat(b);
+    if (isNaN(c)||isNaN(p)) return "";
+    const d = c - p, isP = String(a).includes("%");
+    return d===0 ? "0" : d>0 ? `+${isP?d.toFixed(1)+"%":d}` : `${isP?d.toFixed(1)+"%":d}`;
+  };
+  const ORDER = ["運動處方","營養處方","社會處方","情緒調適處方"];
+  const rows = [
+    ...ORDER.map(k => { const r = prescStats.rows.find(x=>x.label===k)||{}; return {label:k,...r}; }),
+    { label:"處方開立總數(各處方加總)", isTotal:true, ...prescStats.total }
+  ];
+  // col widths for 10 cols: label + 9 data
+  const lw = 2600, dw = Math.floor((TABLE_W - lw) / 9);
+  const rem = TABLE_W - lw - dw * 9;
+  const cw = [lw, dw, dw, dw, dw, dw, dw, dw, dw, dw + rem];
+
+  return [new Table({
+    width: { size: TABLE_W, type: WidthType.DXA }, columnWidths: cw,
+    rows: [
+      new TableRow({ children: [
+        hdrCell("健康處方類別", cw[0]),
+        hdrCell("處方數", cw[1]+cw[2]+cw[3], 3),
+        hdrCell("已執行處方數", cw[4]+cw[5]+cw[6], 3),
+        hdrCell("處方執行率", cw[7]+cw[8]+cw[9], 3),
+      ]}),
+      new TableRow({ children: [
+        cell("", cw[0]),
+        ...["本週","上週","差異","本週","上週","差異","本週","上週","差異"].map((h,i) => hdrCell(h, cw[i+1]))
+      ]}),
+      ...rows.map(r => new TableRow({ cantSplit: true, children: [
+        cell(r.label, cw[0], { size:12, bold: r.isTotal, shade: r.isTotal?"DEEAF1":undefined }),
+        ...[r.open, r.prevOpen||0, diff(r.open,r.prevOpen||0),
+            r.exec, r.prevExec||0, diff(r.exec,r.prevExec||0),
+            r.rate, r.prevRate||"0%", diff(r.rate,r.prevRate||"0%")
+           ].map((v,i) => cell(String(v), cw[i+1], { size:12, bold: r.isTotal, shade: r.isTotal?"DEEAF1":undefined }))
+      ]}))
+    ]
+  })];
+}
+
+// ── clinic table ─────────────────────────────────────────────────
+function buildClinicTable(clinics) {
+  if (!clinics||!clinics.length) return [para("（尚未設定診所資料）", { indent: 480 })];
+  const GROUPS = ["自有營養師","已媒合","有空間待媒合","無空間"];
+  // 9 cols: 分類, 名稱, 教學時間, 電子簽章, 營養空間, 禮券, 開立, 執行, 備註
+  const cw = [700, 1900, 1200, 700, 700, 600, 700, 700, TABLE_W - 700-1900-1200-700-700-600-700-700];
+  
+  const dataRows = [];
+  GROUPS.forEach(grp => {
+    const items = clinics.filter(c => c.group === grp);
+    if (!items.length) return;
+    items.forEach((c, i) => {
+      dataRows.push(new TableRow({ children: [
+        i === 0 ? new TableCell({
+          width: { size: cw[0], type: WidthType.DXA }, rowSpan: items.length,
+          borders: thinBdr, verticalAlign: VerticalAlign.CENTER,
+          shading: { fill: "DEEAF1", type: ShadingType.CLEAR },
+          margins: { top: 60, bottom: 60, left: 100, right: 100 },
+          children: [new Paragraph({
+            alignment: AlignmentType.CENTER, spacing: sp(30,30),
+            children: [run(grp, 12, true, "1F3864")]
+          })]
+        }) : null,
+        cell(c.name||"",          cw[1], { size: 12 }),
+        cell(c.teachTime||"",     cw[2], { size: 12 }),
+        cell(c.eSig?"V":"",       cw[3], { size: 12 }),
+        cell(c.nutrition?"V":"",  cw[4], { size: 12 }),
+        cell(c.coupon?"V":"",     cw[5], { size: 12 }),
+        cell(String(c.openCount||0), cw[6], { bold: true, size: 12 }),
+        cell(String(c.execCount||0), cw[7], { bold: true, size: 12 }),
+        cell(c.note||"",          cw[8], { size: 12 }),
+      ].filter(Boolean)}));
+    });
+  });
+
+  return [new Table({
+    width: { size: TABLE_W, type: WidthType.DXA }, columnWidths: cw,
+    rows: [
+      new TableRow({ children: [
+        hdrCell("分類",cw[0]), hdrCell("診所名稱",cw[1]), hdrCell("預計實地教學時間",cw[2]),
+        hdrCell("電子簽章",cw[3]), hdrCell("營養空間",cw[4]), hdrCell("禮券",cw[5]),
+        hdrCell("開立",cw[6]), hdrCell("執行",cw[7]), hdrCell("備註",cw[8]),
+      ]}),
+      ...dataRows
+    ]
+  })];
+}
+
+// ── generic simple table ─────────────────────────────────────────
+function buildSimpleTable(rows, cols, colWidths) {
+  const filtered = (rows||[]).filter(r => r._keep !== false);
+  if (!filtered.length) return [para("（無資料）", { indent: 480 })];
+  const keys = cols.map((_, i) => i); // use positional
+  return [new Table({
+    width: { size: TABLE_W, type: WidthType.DXA }, columnWidths: colWidths,
+    rows: [
+      new TableRow({ children: cols.map((c,i) => hdrCell(c, colWidths[i])) }),
+      ...filtered.map(r => {
+        const vals = Object.entries(r)
+          .filter(([k]) => !k.startsWith('_'))
+          .map(([,v]) => v);
+        return new TableRow({ children: cols.map((_,i) => cell(String(vals[i]||""), colWidths[i], { size: 12 })) });
+      })
+    ]
+  })];
+}
+
+// ── work report table ─────────────────────────────────────────────
+function buildWorkTable(reports) {
+  if (!reports||!reports.length) return [para("（尚未填寫工作進度）", { indent: 480 })];
+  const lw = 1400, rest = TABLE_W - lw;
+  const cw = [lw, Math.floor(rest/2), Math.ceil(rest/2)];
+  return [new Table({
+    width: { size: TABLE_W, type: WidthType.DXA }, columnWidths: cw,
+    rows: [
+      new TableRow({ children: [hdrCell("報告人",cw[0]), hdrCell("近期工作執行情形",cw[1]), hdrCell("未來工作重點規劃",cw[2])] }),
+      ...reports.map(r => new TableRow({ children: [
+        cell(r.name||"", cw[0], { bold: true, size: 12 }),
+        cell((r.recent||"").split("\n"), cw[1], { size: 12 }),
+        cell((r.plan||"").split("\n"), cw[2], { size: 12 }),
+      ]}))
+    ]
+  })];
+}
+
+// ── schedule / visit tables ───────────────────────────────────────
+function buildScheduleTable(rows) {
+  const filtered = (rows||[]).filter(r=>r._keep!==false);
+  if (!filtered.length) return [para("（無）", { indent: 480 })];
+  const cw = [2000, TABLE_W-2000-1800, 1800];
+  return [new Table({
+    width: { size: TABLE_W, type: WidthType.DXA }, columnWidths: cw,
+    rows: [
+      new TableRow({ children: [hdrCell("時間",cw[0]),hdrCell("會議名稱",cw[1]),hdrCell("地點",cw[2])] }),
+      ...filtered.map(r => new TableRow({ children: [cell(r.date||"",cw[0],{size:12}),cell(r.name||"",cw[1],{size:12}),cell(r.location||"",cw[2],{size:12})] }))
+    ]
+  })];
+}
+
+function buildVisitTable(rows) {
+  const filtered = (rows||[]).filter(r=>r._keep!==false);
+  if (!filtered.length) return [para("（無）", { indent: 480 })];
+  const cw = [2200, TABLE_W-2200-1400, 1400];
+  return [new Table({
+    width: { size: TABLE_W, type: WidthType.DXA }, columnWidths: cw,
+    rows: [
+      new TableRow({ children: [hdrCell("時間",cw[0]),hdrCell("拜會單位及人員",cw[1]),hdrCell("執行狀況",cw[2])] }),
+      ...filtered.map(r => new TableRow({ children: [cell(r.date||"",cw[0],{size:12}),cell(r.unit||"",cw[1],{size:12}),cell(r.status||"",cw[2],{size:12})] }))
+    ]
+  })];
+}
+
+// ── tracked items: group by meeting, show full source + caseTitle ─
+function buildTrackedItems(tracked) {
+  if (!tracked||!tracked.length) return [para("（本次無列管追蹤事項）", { indent: 480 })];
+
+  // Group by meeting name (strip item reference to get meeting name)
+  const groups = {};
+  tracked.forEach(item => {
+    const src = item.source || "";
+    // Extract meeting name: everything before 臨時動議/討論事項/報告事項
+    const meetKey = src.replace(/(臨時動議|討論事項|報告事項).*$/, "").trim() || src;
+    if (!groups[meetKey]) groups[meetKey] = [];
+    groups[meetKey].push(item);
+  });
+
+  const elements = [];
+  const cw_item = 1200;
+  const cw_case = 2000;
+  const cw_dec  = Math.floor((TABLE_W - cw_item - cw_case) / 2);
+  const cw_track = TABLE_W - cw_item - cw_case - cw_dec;
+  const cw = [cw_item, cw_case, cw_dec, cw_track];
+
+  Object.entries(groups).forEach(([meetingName, items]) => {
+    elements.push(new Table({
+      width: { size: TABLE_W, type: WidthType.DXA }, columnWidths: cw,
+      rows: [
+        // Meeting name spanning header
+        new TableRow({ children: [
+          new TableCell({
+            columnSpan: 4, borders: thinBdr,
+            shading: { fill: "BDD7EE", type: ShadingType.CLEAR },
+            margins: { top: 60, bottom: 60, left: 180, right: 180 },
+            children: [new Paragraph({ spacing: sp(40,40), children: [run(
+            meetingName.includes("會議") ? meetingName : meetingName + "　內部工作會議",
+            12, true, "1F3864")] })]
+          })
+        ]}),
+        // Column headers
+        new TableRow({ children: [
+          hdrCell("項次", cw[0]),
+          hdrCell("案由", cw[1]),
+          hdrCell("決議事項", cw[2]),
+          hdrCell("追蹤辦理情形", cw[3]),
+        ]}),
+        // Data rows
+        ...items.map(item => {
+          const itemRef = (item.source||"").replace(/^.*?((?:臨時動議|討論事項|報告事項).*)$/, "$1") || item.source || "";
+          const trackText = item.mode==="decision" ? "依決議辦理。" : (item.customText?.trim()||"（待填寫）");
+          return new TableRow({ cantSplit: true, children: [
+            cell(itemRef, cw[0], { size: 12 }),
+            cell(item.caseTitle||"", cw[1], { size: 12 }),
+            cell((item.content||""), cw[2], { size: 12 }),
+            cell(trackText, cw[3], { size: 12, shade: "DEEAF1" }),
+          ]});
+        })
+      ]
+    }));
+    elements.push(emptyP());
+  });
+  return elements;
+}
+
+// ── proposals: pure text, consistent format ───────────────────────
+function buildProposals(items, isDiscussion) {
+  const cnums = ["一","二","三","四","五","六","七","八","九","十"];
+  const INDENT = 480;
+  const result = [];
+  items.forEach((p, i) => {
+    // 第X案 (left) + 提案人 (right) via tab
+    result.push(new Paragraph({
+      spacing: sp(160, 60),
+      tabStops: [{ type: "right", position: TABLE_W }],
+      children: [
+        run(`第${cnums[i]||i+1}案`, 12, true),
+        new TextRun("\t"),
+        run(`提案人：${p.proposer}`, 12),
+      ]
+    }));
+    // 案由、說明、決議 - same indent, same style, no gap between them
+    result.push(new Paragraph({
+      spacing: sp(0, 0), indent: { left: INDENT },
+      children: [ run("案　由：", 12), run(p.caseTitle||"", 12) ]
+    }));
+    result.push(new Paragraph({
+      spacing: sp(0, 0), indent: { left: INDENT },
+      children: [ run("說　明：", 12, true), run(p.description||"", 12) ]
+    }));
+    if (isDiscussion) {
+      result.push(new Paragraph({
+        spacing: sp(0, 0), indent: { left: INDENT },
+        children: [ run("決　議：", 12, true), run(" ", 12) ]
+      }));
+    }
+    result.push(emptyP());
+  });
+  return result;
+}
+
+// ── main docx builder ─────────────────────────────────────────────
+function buildDocx(data) {
+  const { info, prescStats, clinics, tracked, proposals, sectionData } = data;
+  const sd = sectionData || {};
+  const bySection = s => (proposals||[]).filter(p => p.include && p.section === s);
+
+  const pdRows     = (sd.prescriptionDayCourses||[]).filter(r=>r._keep!==false);
+  const uninstr    = (sd.uninstructed||[]).filter(r=>r._keep!==false);
+  const venues     = (sd.venues||[]).filter(r=>r._keep!==false);
+  const potCourses = (sd.potentialCourses||[]).filter(r=>r._keep!==false);
+  const workReports= sd.workReports||[];
+  const schedules  = sd.schedules||[];
+  const visits     = sd.visits||[];
+  const courses    = (sd.courses||[]).filter(c=>c._keep!==false);
+  const rpt = bySection("報告事項");
+  const dis = bySection("討論事項");
+  const urg = bySection("臨時動議");
+
+  // course table per type
+  const TYPES = ["運動處方","社會處方","情緒調適處方","營養處方"];
+  const courseElems = [];
+  TYPES.forEach(type => {
+    const tc = courses.filter(c=>c.type===type);
+    if (!tc.length) return;
+    courseElems.push(h3Para(type, 960));
+    const lw = 2200, rest = TABLE_W - lw;
+    const cw = [lw, 1100, 1000, 2300, rest-1100-1000-2300];
+    courseElems.push(new Table({
+      width: { size: TABLE_W, type: WidthType.DXA }, columnWidths: cw,
+      rows: [
+        new TableRow({ children: [hdrCell("課程名稱",cw[0]),hdrCell("講師",cw[1]),hdrCell("時間",cw[2]),hdrCell("日期",cw[3]),hdrCell("授課地點",cw[4])] }),
+        ...tc.map(c => new TableRow({ children: [
+          cell(c.name||"",cw[0],{size:12}),
+          cell(c.instructor||"",cw[1],{size:12}),
+          cell(`週${c.weekday||""} ${c.time||""}`,cw[2],{size:12}),
+          cell(c.dates||"",cw[3],{size:12}),
+          cell(c.location||"",cw[4],{size:12}),
+        ]}))
+      ]
+    }));
+    courseElems.push(emptyP());
+  });
+
+  // simple table col widths (all must sum to TABLE_W)
+  const pd_cw    = [1100, 900, 2400, 1500, TABLE_W-1100-900-2400-1500];
+  const un_cw    = [1500, 1200, 1600, 1800, TABLE_W-1500-1200-1600-1800];
+  const ve_cw    = [2000, 1200, 1500, 2500, TABLE_W-2000-1200-1500-2500];
+  const pot_cw   = [2400, 1300, 1500, 1200, TABLE_W-2400-1300-1500-1200];
+
+  const children = [
+    // ── 標題 ──
+    ctrPara(info.org, 14, true),
+    ctrPara(info.subtitle, 12, false),
+    ctrPara(`${info.meetingNo}內部工作會議${info.theme?`：${info.theme}`:""}　會議議程`, 14, true),
+    emptyP(),
+    para(`時間：${info.date}（星期${info.weekday}）${info.time}`, { size: 12 }),
+    para(`地點：${info.location}`, { size: 12 }),
+    para(`主席：${info.chair}`, { size: 12, after: 120 }),
+
+    // ── 壹 ──
+    h2Para("壹、主席致詞"),
+    emptyP(),
+
+    // ── 貳 ──
+    h2Para("貳、計畫推動現況"),
+    h3Para(`一、現行健康處方開立及執行情形${info.dataDate?`（截至 ${info.dataDate}）`:""}`),
+    ...buildPrescTable(prescStats),
+    emptyP(),
+
+    h3Para(`二、目前診所拓點現況${info.dataDate?`（截至 ${info.dataDate}）`:""}`),
+    ...buildClinicTable(clinics||[]),
+    emptyP(),
+
+    h3Para("三、目前課程開設現況"),
+    ...(courseElems.length ? courseElems : [para("（尚未輸入課程資料）", { indent: 480 })]),
+
+    h3Para("四、本月份健康處方課程表"),
+    para("（詳見附件）", { indent: 960 }),
+
+    h3Para("五、處方活動日課程表"),
+    ...buildSimpleTable(pdRows, ["時間","區塊","課程名稱","講師","地點"], pd_cw),
+    emptyP(),
+
+    h3Para("六、曾參與說明會但未開課教師名單"),
+    ...buildSimpleTable(uninstr, ["教師姓名","課程類型","職稱","推薦單位","預計開立課程"], un_cw),
+    emptyP(),
+
+    h3Para("七、潛在場地列表"),
+    ...buildSimpleTable(venues, ["場地名稱","租金","空間大小","提供器材","備註"], ve_cw),
+    emptyP(),
+
+    h3Para("八、潛在課程及師資列表"),
+    ...buildSimpleTable(potCourses, ["課程名稱","講師","類型","狀態","備註"], pot_cw),
+    emptyP(),
+
+    h3Para("九、未成功開課及可直接開課之課程列表"),
+    ...buildSimpleTable(potCourses.filter(r=>r.status==="可直接開課"||r.status==="未成功"),
+      ["課程名稱","講師","類型","狀態","備註"], pot_cw),
+    emptyP(),
+
+    // ── 參 ──
+    h2Para("參、確認歷次健康台灣深耕計畫會議紀錄暨決議辦理情形"),
+    para("一、健康台灣深耕計畫-臺北市慢性病防治全人健康智慧整合照護計畫歷次會議如下表：",
+      { size: 12, indent: 480 }),
+    emptyP(),
+    ...buildTrackedItems(tracked||[]),
+
+    // ── 肆 ──
+    h2Para("肆、報告事項"),
+    h3Para("一、請各位同仁報告上週工作內容及未來一週工作規劃，報告內容如下表："),
+    ...buildWorkTable(workReports),
+    emptyP(),
+    ...(rpt.length ? buildProposals(rpt, false) : []),
+
+    h3Para("二、重要會議及活動時程"),
+    ...buildScheduleTable(schedules),
+    emptyP(),
+
+    h3Para("三、拜會處方執行相關單位時程"),
+    ...buildVisitTable(visits),
+    emptyP(),
+
+    // ── 伍 ──
+    h2Para("伍、討論事項"),
+    ...(dis.length ? buildProposals(dis, true) : [para("（無）", { indent: 480 })]),
+
+    // ── 陸 ──
+    h2Para("陸、臨時動議"),
+    ...(urg.length ? buildProposals(urg, true) : [para("（無）", { indent: 480 })]),
+
+    // ── 柒 ──
+    h2Para("柒、散會"),
+  ];
+
+  return new Document({
+    styles: { default: { document: { run: { font: KAI, size: 24 } } } },
+    sections: [{
+      properties: {
+        page: {
+          size: { width: PAGE_W, height: 16838 },
+          margin: { top: MT, right: MR, bottom: MB, left: ML }
+        }
+      },
+      children
+    }]
+  });
+}
+
+async function generateAndDownloadDocx(data, filename) {
+  const doc = buildDocx(data);
+  const blob = await Packer.toBlob(doc);
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename || '議程.docx';
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+// ════════════════════════════════════════════════════════════
+
 
 // Firebase
 const waitFB = () => new Promise(res => { if(window.firebaseReady) return res(); window.addEventListener("firebaseReady",res,{once:true}); });
@@ -120,11 +609,11 @@ async function extractMinutes(file) {
 3. content 要完整，不要省略。`
   if(file.name.toLowerCase().endsWith(".pdf")){
     const b64=await fileToBase64(file);
-    const res=await fetch(API,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:1000,messages:[{role:"user",content:[{type:"document",source:{type:"base64",media_type:"application/pdf",data:b64}},{type:"text",text:prompt}]}]})});
+    const res=await fetch(API,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:4000,messages:[{role:"user",content:[{type:"document",source:{type:"base64",media_type:"application/pdf",data:b64}},{type:"text",text:prompt}]}]})});
     const d=await res.json(); return parseJSON(d.content?.[0]?.text??"{}",{managedItems:[],newItems:[]});
   } else {
     const raw=await docxToText(file);
-    const res=await fetch(API,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:1000,messages:[{role:"user",content:`${prompt}\n\n會議紀錄：\n\n${raw}`}]})});
+    const res=await fetch(API,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:4000,messages:[{role:"user",content:`${prompt}\n\n會議紀錄：\n\n${raw}`}]})});
     const d=await res.json(); return parseJSON(d.content?.[0]?.text??"{}",{managedItems:[],newItems:[]});
   }
 }
@@ -132,7 +621,7 @@ async function extractProposal(file) {
   const prompt=`請從這份提案單中擷取所有提案，以 JSON 陣列回傳：[{"id":"p1","proposer":"提案人","caseTitle":"案由","description":"說明","suggestedSection":"討論事項或報告事項或臨時動議"}]`;
   if(file.name.toLowerCase().endsWith(".pdf")){
     const b64=await fileToBase64(file);
-    const res=await fetch(API,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:1000,messages:[{role:"user",content:[{type:"document",source:{type:"base64",media_type:"application/pdf",data:b64}},{type:"text",text:prompt}]}]})});
+    const res=await fetch(API,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:4000,messages:[{role:"user",content:[{type:"document",source:{type:"base64",media_type:"application/pdf",data:b64}},{type:"text",text:prompt}]}]})});
     const d=await res.json(); return parseJSON(d.content?.[0]?.text??"[]",[]);
   } else {
     const raw=await docxToText(file);
@@ -236,21 +725,40 @@ async function parseCourseExcel(file) {
   });
 }
 
-async function parseCoursesToSchedule(rows) {
-  // Build a text representation and ask Claude to format it
-  const header = rows[0] || [];
-  const dataRows = rows.slice(1).filter(r => r.some(c => c !== ""));
-  const text = [header.join("\t"), ...dataRows.map(r => r.join("\t"))].join("\n");
-  const res = await fetch(API, {
-    method:"POST", headers:{"Content-Type":"application/json"},
-    body: JSON.stringify({
-      model:"claude-sonnet-4-20250514", max_tokens:1000,
-      messages:[{role:"user", content:`以下是課程資料（TSV格式）：\n\n${text}\n\n請將這些課程資料整理成一個 JSON 陣列，每個元素代表一個課程：\n[{"name":"課程名稱","instructor":"講師","weekday":"星期幾（一二三四五六日）","time":"時間（例：14:00-15:30）","location":"地點","dates":"日期（例：3/4, 3/11, 3/18）","type":"運動處方或營養處方或社會處方或情緒調適處方","description":"課程說明"}]\n只回傳 JSON 陣列，不要其他文字。`}]
-    })
-  });
-  const d = await res.json();
-  try { return JSON.parse((d.content?.[0]?.text??"[]").replace(/```json\n?|```/g,"").trim()); }
-  catch { return []; }
+function parseCoursesToSchedule(rows) {
+  // Direct mapping from Excel columns (no AI needed)
+  // Expected columns: 處方類型, 課程名稱, 講師, 星期, 時間, 日期, 授課地點, 課程說明
+  // Skip first row if it's an instruction row (contains 填寫說明)
+  let dataStart = 1;
+  const firstRow = (rows[0] || []).join('');
+  if (firstRow.includes('填寫說明') || firstRow.includes('處方類型')) {
+    // rows[0] is instruction or already header, check rows[1]
+    if (rows[1] && rows[1].join('').includes('處方類型')) {
+      dataStart = 2; // skip instruction row and header row
+    } else if (firstRow.includes('填寫說明')) {
+      dataStart = 2; // skip instruction, row[1] is header
+    }
+  }
+
+  const result = [];
+  for (let i = dataStart; i < rows.length; i++) {
+    const r = rows[i];
+    if (!r || !r.some(c => c !== "" && c !== null && c !== undefined)) continue;
+    const type = String(r[0] || "").trim();
+    const name = String(r[1] || "").trim();
+    if (!name) continue; // skip empty rows
+    result.push({
+      type: type || "運動處方",
+      name: name,
+      instructor: String(r[2] || "").trim(),
+      weekday: String(r[3] || "").trim(),
+      time: String(r[4] || "").trim(),
+      dates: String(r[5] || "").trim(),
+      location: String(r[6] || "").trim(),
+      description: String(r[7] || "").trim(),
+    });
+  }
+  return result;
 }
 
 // Firebase: save/load section data
@@ -467,12 +975,11 @@ function CourseScheduleSection({ onDataChange }) {
     setLoading("解析課程 Excel…");
     try {
       const rows = await parseCourseExcel(file);
-      setLoading("AI 整理課程資料…");
-      const parsed = await parseCoursesToSchedule(rows);
+      const parsed = parseCoursesToSchedule(rows);
       if (parsed.length > 0) {
         setCourses(parsed.map((c,i)=>({...c, _id: Date.now()+i, _keep:true})));
       } else {
-        alert("無法解析課程資料，請確認 Excel 格式");
+        alert("未讀到課程資料，請確認 Excel 格式：\n第一欄=處方類型、第二欄=課程名稱、第三欄=講師...");
       }
     } catch(e) { alert("解析失敗："+e.message); }
     setLoading("");
@@ -868,8 +1375,16 @@ function App() {
   useEffect(()=>{ if(excelRows) recalcStats(excelRows,cutoffThis,cutoffLast); },[cutoffThis,cutoffLast]);
 
   const handleMinutes=async(file)=>{
-    if(!file)return;setErr("");setLoading("解析會議紀錄…");
-    try{const data=await extractMinutes(file);setManaged((data?.managedItems||[]).filter(i=>i.isManaged).map(i=>({...i,include:true,mode:"decision",customText:""})));setSuggested((data?.newItems||[]).filter(i=>i.needsManagement).map(i=>({...i,include:false,mode:"decision",customText:""})));setMinutesName(file.name);setStep(1);}
+    if(!file)return;setErr("");setLoading("解析會議紀錄（可能需要30-60秒）…");
+    try{
+      const data=await extractMinutes(file);
+      const managed=(data?.managedItems||[]).filter(i=>i.isManaged).map(i=>({...i,include:true,mode:"decision",customText:""}));
+      const suggested=(data?.newItems||[]).filter(i=>i.needsManagement).map(i=>({...i,include:false,mode:"decision",customText:""}));
+      if(managed.length===0&&suggested.length===0){
+        setErr("⚠ AI 未解析到任何事項，可能是 API 回應格式有誤。已自動跳至下一步，可直接繼續。");
+      }
+      setManaged(managed);setSuggested(suggested);setMinutesName(file.name);setStep(1);
+    }
     catch(e){setErr("解析失敗："+e.message);}setLoading("");
   };
   const handleExcel=async(file)=>{
@@ -885,10 +1400,14 @@ function App() {
 
   const handleGenerate=async()=>{
     const tracked=[...managed.filter(i=>i.include),...suggested.filter(i=>i.include)];
-    const html=buildWordHTML(info,prescStats,clinics,tracked,proposals,sectionData);
-    const blob=new Blob(["\ufeff"+html],{type:"application/msword;charset=utf-8"});
-    const url=URL.createObjectURL(blob);const a=document.createElement("a");a.href=url;a.download=`${info.meetingNo}內部工作會議議程.doc`;a.click();URL.revokeObjectURL(url);
-    try{const record={id:`agenda_${Date.now()}`,title:`${info.meetingNo}內部工作會議`,date:info.date,createdAt:new Date().toISOString(),info,tracked,proposals:proposals.filter(p=>p.include),hasPrescStats:!!prescStats};await saveArchive(record);}catch(e){console.warn("存檔失敗",e);}
+    try {
+      await generateAndDownloadDocx(
+        { info, prescStats, clinics, tracked, proposals, sectionData },
+        `${info.meetingNo}內部工作會議議程.docx`
+      );
+      const record={id:`agenda_${Date.now()}`,title:`${info.meetingNo}內部工作會議`,date:info.date,createdAt:new Date().toISOString(),info,tracked,proposals:proposals.filter(p=>p.include),hasPrescStats:!!prescStats};
+      await saveArchive(record);
+    } catch(e) { setErr("下載失敗："+e.message); console.error(e); }
     setGenerated(true);
   };
 
@@ -919,7 +1438,10 @@ function App() {
               <div key={a.id} style={{...S.card,padding:0,overflow:"hidden"}}>
                 <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"12px 18px"}}>
                   <div><div style={{fontWeight:700,fontSize:14}}>{a.title}</div><div style={{fontSize:12,color:C.muted,marginTop:2}}>會議日期：{a.date}　存檔：{new Date(a.createdAt).toLocaleString("zh-TW")}</div></div>
-                  <button style={S.btnS()} onClick={async()=>{try{const record=await loadArchiveRecord(a.id);if(!record)return alert("找不到存檔資料");const html=buildWordHTML(record.info,null,DEFAULT_CLINICS,record.tracked||[],record.proposals||[]);const blob=new Blob(["\ufeff"+html],{type:"application/msword;charset=utf-8"});const url=URL.createObjectURL(blob);const el=document.createElement("a");el.href=url;el.download=`${record.title}議程（存檔）.doc`;el.click();URL.revokeObjectURL(url);}catch(e){alert("下載失敗："+e.message);}}}>⬇ 下載</button>
+                  <button style={S.btnS()} onClick={async()=>{try{const record=await loadArchiveRecord(a.id);if(!record)return alert("找不到存檔資料");await generateAndDownloadDocx(
+        { info: record.info, prescStats: null, clinics: DEFAULT_CLINICS, tracked: record.tracked||[], proposals: record.proposals||[], sectionData: record.sectionData||{} },
+        `${record.title}議程（存檔）.docx`
+      );}catch(e){alert("下載失敗："+e.message);}}}>⬇ 下載</button>
                 </div>
               </div>
             ))}
@@ -1134,10 +1656,10 @@ function App() {
                 <div style={{fontWeight:700,marginTop:8}}>柒、散會</div>
               </div>
             </div>
-            {generated&&<div style={S.ok}>✓ 議程已下載並存檔！可在「歷次存檔」查閱。</div>}
+            {generated&&<div style={S.ok}>✓ 議程 .docx 已下載並存檔！可在「歷次存檔」查閱。</div>}
             <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
               <button style={S.btnO} onClick={()=>setStep(4)}>← 返回修改</button>
-              <button style={S.btn} onClick={handleGenerate}>⬇ 下載議程 Word 檔</button>
+              <button style={S.btn} onClick={handleGenerate}>⬇ 下載議程 .docx</button>
             </div>
           </div></div>}
         </>)}
