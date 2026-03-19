@@ -31,12 +31,13 @@
 <style>* { box-sizing: border-box; margin: 0; padding: 0; } body { font-family: 'Noto Serif TC',STSong,serif; background:#f4efe4; color:#1e1a12; } input,textarea,select,button{font-family:inherit;}</style>
 </head>
 <body>
+<!-- v20260319115838 -->
 <div id="root"></div>
 <script type="text/babel" data-presets="react">
 const { useState, useEffect, useRef, useCallback } = React;
 const API = "https://claude-proxy.s71043201.workers.dev";
 
-// ── Firebase ──────────────────────────────────────────────────
+// Firebase
 const waitFB = () => new Promise(res => { if(window.firebaseReady) return res(); window.addEventListener("firebaseReady",res,{once:true}); });
 async function fbLoad(key) { await waitFB(); return window.fbGet(key); }
 async function fbSave(key,val) { await waitFB(); return window.fbSet(key,val); }
@@ -61,7 +62,7 @@ async function saveArchive(record) {
 }
 async function loadArchiveRecord(id) { return fbLoad(`agenda/archives/${id}`); }
 
-// ── File helpers ──────────────────────────────────────────────
+// File helpers
 function parseDate(val) {
   if (!val) return null;
   const m = String(val).trim().match(/(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})/);
@@ -145,7 +146,7 @@ async function polishText(raw) {
   const d=await res.json(); return d.content?.[0]?.text??raw;
 }
 
-// ── Design ────────────────────────────────────────────────────
+// Design
 const C={ink:"#1e1a12",gold:"#8b6914",cream:"#fdf8ee",bg:"#f4efe4",border:"#d4c49a",muted:"#7a6540",blue:"#1565c0",green:"#2e7d32",purple:"#5d3a9a"};
 const SC={"討論事項":C.blue,"報告事項":C.green,"臨時動議":C.purple};
 const cnums=["一","二","三","四","五","六","七","八","九","十"];
@@ -220,7 +221,7 @@ function ImeTarea({value, onChange, placeholder, rows=5, style: sx}) {
   }, []);
   return <textarea id={id.current} defaultValue={value||""} placeholder={placeholder||""} rows={rows} style={sx} />;
 }
-// ── Course Excel parser ───────────────────────────────────────
+// Course Excel parser
 async function parseCourseExcel(file) {
   return new Promise((res,rej)=>{
     const r=new FileReader();
@@ -253,7 +254,7 @@ async function parseCoursesToSchedule(rows) {
   catch { return []; }
 }
 
-// ── Firebase: save/load section data ─────────────────────────
+// Firebase: save/load section data
 async function loadSectionData(key) {
   const v = await fbLoad(`agenda_sections/${key}`); return v || null;
 }
@@ -261,7 +262,102 @@ async function saveSectionData(key, data) {
   await fbSave(`agenda_sections/${key}`, data);
 }
 
-// ── PersistSection: reusable component for sections 5-9 and schedules ──
+// PersistSection: reusable component for sections 5-9 and schedules
+function AgendaForm({info,onChange}) {
+  const F=({label,k,flex,ph})=><div style={{flex:flex||1}}>
+    <div style={S.lbl}>{label}</div>
+    <ImeInput style={S.inp} value={info[k]||""} placeholder={ph} onChange={v=>onChange({...info,[k]:v})}/>
+  </div>;
+  return <div style={S.cb}>
+    <div style={S.row}><F label="機構名稱" k="org" flex={2}/><F label="副標題" k="subtitle" flex={2}/></div>
+    <div style={{...S.row,marginTop:10}}><F label="第幾次會議" k="meetingNo" ph="第十八次"/><F label="會議主題" k="theme" flex={2} ph="統整近期工作進度與後續執行方向"/></div>
+    <div style={{...S.row,marginTop:10}}>
+      <F label="日期（民國）" k="date" ph="115年04月02日"/>
+      <F label="星期" k="weekday" ph="三"/>
+      <F label="時間" k="time" ph="14：00"/>
+    </div>
+    <div style={{...S.row,marginTop:10}}><F label="地點" k="location" flex={2}/><F label="主席" k="chair"/></div>
+    <div style={{marginTop:10}}>
+      <div style={S.lbl}>統計截止日期（顯示於表格標題）</div>
+      <ImeInput style={{...S.inp,maxWidth:280}} value={info.dataDate||""} placeholder="例：3/19 健康處方管理系統" onChange={v=>onChange({...info,dataDate:v})}/>
+    </div>
+  </div>;
+}
+
+function TrackedCard({item,index,onChange}) {
+  const [polishing,setPolishing]=React.useState(false);
+  const handlePolish=async()=>{
+    if(!item.customText?.trim())return;
+    setPolishing(true);
+    const t=await polishText(item.customText);
+    onChange(index,{...item,customText:t});
+    setPolishing(false);
+  };
+  return <div style={S.ibox}>
+    <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:8}}>
+      <div style={{flex:1}}>
+        <span style={S.tag(C.ink)}>{item.source}</span>
+        <strong style={{fontSize:13}}>{item.caseTitle}</strong>
+        {item.reason&&<span style={{fontSize:11,color:C.gold,marginLeft:6}}>★ {item.reason}</span>}
+      </div>
+      <label style={{display:"flex",alignItems:"center",gap:5,cursor:"pointer",fontSize:12,whiteSpace:"nowrap",marginLeft:8}}>
+        <input type="checkbox" checked={item.include} onChange={e=>onChange(index,{...item,include:e.target.checked})}/> 納入議程
+      </label>
+    </div>
+    {item.include && <>
+      <div style={{fontSize:11,color:"#555",padding:"5px 8px",background:"#f0ead6",borderRadius:1,marginBottom:8,lineHeight:1.7}}>
+        {item.content}{item.status&&<><br/><em style={{color:C.muted}}>辦理情形：{item.status}</em></>}
+      </div>
+      <div style={{display:"flex",gap:18,marginBottom:6}}>
+        {[["decision","依決議辦理"],["custom","另外輸入說明"]].map(([m,l])=>(
+          <label key={m} style={{display:"flex",alignItems:"center",gap:5,cursor:"pointer",fontSize:12}}>
+            <input type="radio" name={`m-${index}-${item.id}`} checked={item.mode===m} onChange={()=>onChange(index,{...item,mode:m})}/> {l}
+          </label>
+        ))}
+      </div>
+      {item.mode==="custom"&&<>
+        <ImeTarea style={S.ta} value={item.customText||""} placeholder="請輸入辦理情形說明（口語也可以）" onChange={v=>onChange(index,{...item,customText:v})}/>
+        <button style={{...S.btnS(),marginTop:5}} onClick={handlePolish} disabled={polishing}>{polishing?"整理中…":"✦ AI 整理成公文格式"}</button>
+      </>}
+      {item.mode==="decision"&&<div style={{fontSize:11,color:"#999",fontStyle:"italic"}}>顯示為「依決議辦理。」</div>}
+    </>}
+  </div>;
+}
+
+function ProposalCard({prop,index,onChange,onRemove}) {
+  const col=SC[prop.section]||C.gold;
+  return <div style={{...S.ibox,borderLeft:`3px solid ${col}`,position:"relative"}}>
+    <button onClick={onRemove} style={{position:"absolute",top:8,right:10,background:"transparent",border:"none",cursor:"pointer",fontSize:16,color:"#bbb"}}>✕</button>
+    <div style={{paddingRight:24,marginBottom:8}}>
+      <span style={S.tag(col)}>{prop.section}</span>
+      <strong style={{fontSize:13}}>{prop.caseTitle}</strong>
+      <span style={{fontSize:11,color:C.muted,marginLeft:6}}>提案人：{prop.proposer}</span>
+    </div>
+    <div style={{display:"flex",alignItems:"center",gap:14,marginBottom:8,flexWrap:"wrap"}}>
+      <span style={{fontSize:11,color:C.muted}}>放置於：</span>
+      {["討論事項","報告事項","臨時動議"].map(s=>(
+        <label key={s} style={{display:"flex",alignItems:"center",gap:4,cursor:"pointer",fontSize:12}}>
+          <input type="radio" name={`sec-${prop.id}`} checked={prop.section===s} onChange={()=>onChange(index,{...prop,section:s})}/> <span style={{color:SC[s]}}>{s}</span>
+        </label>
+      ))}
+    </div>
+    <div style={{fontSize:12,color:"#444",padding:"6px 10px",background:"#f0ead6",borderRadius:1,lineHeight:1.8,whiteSpace:"pre-wrap"}}>{prop.description}</div>
+    <label style={{display:"flex",alignItems:"center",gap:5,cursor:"pointer",fontSize:12,marginTop:8}}>
+      <input type="checkbox" checked={prop.include} onChange={e=>onChange(index,{...prop,include:e.target.checked})}/> 納入議程
+    </label>
+  </div>;
+}
+
+function UploadZone({onFile,label,sub,fileRef,accept=".pdf,.docx"}) {
+  return <div style={S.drop} onDragOver={e=>e.preventDefault()} onDrop={e=>{e.preventDefault();onFile(e.dataTransfer.files[0]);}} onClick={()=>fileRef?.current?.click()}>
+    <div style={{fontSize:28,marginBottom:6}}>📎</div>
+    <div style={{fontWeight:700,marginBottom:3,fontSize:14}}>{label}</div>
+    <div style={{fontSize:12,color:C.muted}}>{sub}</div>
+    <input ref={fileRef} type="file" accept={accept} style={{display:"none"}} onChange={e=>{onFile(e.target.files[0]);e.target.value="";}}/>
+  </div>;
+}
+
+
 function PersistSection({ title, sectionKey, columns, defaultRow, renderRow, onDataChange }) {
   const [rows, setRows] = useState([]);
   const [loaded, setLoaded] = useState(false);
@@ -349,7 +445,7 @@ function PersistSection({ title, sectionKey, columns, defaultRow, renderRow, onD
   );
 }
 
-// ── CourseScheduleSection ────────────────────────────────────
+// CourseScheduleSection
 function CourseScheduleSection({ onDataChange }) {
   const [courses, setCourses] = useState([]);
   const [loading, setLoading] = useState("");
@@ -464,7 +560,7 @@ function CourseScheduleSection({ onDataChange }) {
   );
 }
 
-// ── Section column definitions ────────────────────────────────
+// Section column definitions
 const PRESCRIPTION_DAY_COLS = [
   {key:"time",label:"時間",placeholder:"例：13:00-13:50"},
   {key:"section",label:"區塊",type:"select",options:["運動","社會","情緒調適","營養"]},
@@ -515,7 +611,28 @@ const VISIT_COLS = [
 ];
 const VISIT_DEFAULT = {date:"",unit:"",status:"未完成"};
 
-// ── buildWordHTML (full version) ──────────────────────────────
+// buildWordHTML (full version)
+
+const DEFAULT_CLINICS=[
+  {id:"c01",group:"自有營養師",name:"王永良診所",teachTime:"2/5(四)10:00",eSig:true,nutrition:true,coupon:true,consultation:true,openCount:26,execCount:4,note:"每兩個月一次的週五下午 營養師：邱淑娟"},
+  {id:"c02",group:"自有營養師",name:"榮陽安心診所",teachTime:"2/6(五)10:00",eSig:true,nutrition:true,coupon:true,consultation:true,openCount:37,execCount:4,note:"每週三四五上午 營養師：蔡佳樺"},
+  {id:"c03",group:"自有營養師",name:"王志靈內科診所",teachTime:"2/10(二)11:00",eSig:true,nutrition:true,coupon:true,consultation:true,openCount:20,execCount:1,note:"待完成職登"},
+  {id:"c04",group:"已媒合",name:"洪耳鼻喉科診所",teachTime:"-",eSig:false,nutrition:true,coupon:true,consultation:true,openCount:691,execCount:253,note:"每週六上午 營養師：石偊靖"},
+  {id:"c05",group:"已媒合",name:"永安家庭醫學科診所",teachTime:"2/5(四)13:00",eSig:true,nutrition:true,coupon:true,consultation:true,openCount:72,execCount:8,note:"每週四下午 營養師：邱詩芸"},
+  {id:"c06",group:"已媒合",name:"石牌鄭身心醫學診所",teachTime:"2/6(五)11:00",eSig:true,nutrition:true,coupon:true,consultation:true,openCount:76,execCount:7,note:"每個月第一週的週四上午 營養師：官彧"},
+  {id:"c07",group:"已媒合",name:"蔡秉勳小兒科診所",teachTime:"2/11(三)13:00",eSig:true,nutrition:true,coupon:true,consultation:true,openCount:296,execCount:2,note:"每個月第三週的週四上午 營養師：官彧"},
+  {id:"c08",group:"已媒合",name:"翰譽診所",teachTime:"2/12(四)14:00",eSig:true,nutrition:true,coupon:true,consultation:true,openCount:48,execCount:14,note:"4/15上午9點至12點首次駐點 營養師：官彧"},
+  {id:"c09",group:"已媒合",name:"台北欣安耳鼻喉科",teachTime:"2/5(四)14:00",eSig:true,nutrition:true,coupon:false,consultation:true,openCount:44,execCount:0,note:"3/25上午9點至11點首次駐點 營養師：官彧"},
+  {id:"c10",group:"有空間待媒合",name:"何叔芳小兒科診所",teachTime:"2/11(三)14:00",eSig:true,nutrition:true,coupon:true,consultation:true,openCount:36,execCount:6,note:"待安排"},
+  {id:"c11",group:"有空間待媒合",name:"清田婦產科家醫科診所",teachTime:"3/4(三)15:00",eSig:true,nutrition:true,coupon:true,consultation:true,openCount:12,execCount:0,note:"待收案數增加再媒合"},
+  {id:"c12",group:"有空間待媒合",name:"洪志淳皮膚科診所",teachTime:"3/5(四)13:00",eSig:true,nutrition:true,coupon:true,consultation:true,openCount:20,execCount:0,note:"可安排週一上午"},
+  {id:"c13",group:"無空間",name:"陳獻明小兒科",teachTime:"2/6(五)13:00",eSig:true,nutrition:true,coupon:true,consultation:true,openCount:32,execCount:0,note:"無空間"},
+  {id:"c14",group:"無空間",name:"杏華診所",teachTime:"2/9(一)10:00",eSig:true,nutrition:true,coupon:true,consultation:true,openCount:32,execCount:0,note:"無空間"},
+  {id:"c15",group:"無空間",name:"慧捷診所",teachTime:"2/10(二)14:00",eSig:true,nutrition:true,coupon:true,consultation:true,openCount:0,execCount:0,note:"無空間"},
+  {id:"c16",group:"無空間",name:"昱德聯合診所",teachTime:"3/4(三)15:00",eSig:true,nutrition:true,coupon:true,consultation:true,openCount:24,execCount:6,note:"無空間"},
+  {id:"c17",group:"無空間",name:"臻心復健科診所",teachTime:"3/5(四)15:00",eSig:true,nutrition:true,coupon:true,consultation:true,openCount:16,execCount:0,note:"無空間"},
+];
+
 function buildWordHTML(info, prescStats, clinics, tracked, proposals, sectionData) {
   const sd = sectionData || {};
   const bySection=s=>proposals.filter(p=>p.include&&p.section===s);

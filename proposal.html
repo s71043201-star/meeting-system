@@ -43,6 +43,7 @@
 </style>
 </head>
 <body>
+<!-- v20260319115838 -->
 <div id="root"></div>
 
 <script type="text/babel" data-presets="react">
@@ -51,7 +52,7 @@ const { useState, useEffect, useRef, useCallback } = React;
 const ADMIN_PIN = "0000";
 const API = "https://claude-proxy.s71043201.workers.dev";
 
-// ── Firebase helpers ──────────────────────────────────────────
+// Firebase helpers
 const waitFirebase = () => new Promise(res => {
   if (window.firebaseReady) return res();
   window.addEventListener("firebaseReady", res, { once: true });
@@ -81,7 +82,7 @@ async function saveMembers(list) { await fbSave("members/list", list); }
 async function loadDeadline() { const v = await fbLoad("proposals/deadline"); return v || ""; }
 async function saveDeadline(iso) { await fbSave("proposals/deadline", iso); }
 
-// ── Claude API ────────────────────────────────────────────────
+// Claude API
 async function fileToBase64(file) {
   return new Promise((res, rej) => {
     const r = new FileReader();
@@ -125,7 +126,7 @@ async function parseProposalFile(file) {
   } catch { return null; }
 }
 
-// ── Design tokens ─────────────────────────────────────────────
+// Design tokens
 const C = { bg:"#f7f4ee", surface:"#ffffff", ink:"#1a1610", gold:"#b5820a", muted:"#7a7060",
   border:"#ddd5b8", green:"#1e6b3a", blue:"#1a4f8a", purple:"#5a2d82", red:"#b03a2e", cream:"#fdf9f0" };
 const SC = { "討論事項":C.blue, "報告事項":C.green, "臨時動議":C.purple };
@@ -197,45 +198,6 @@ function ImeTarea({value, onChange, placeholder, rows=5, style: sx}) {
   }, []);
   return <textarea id={id.current} defaultValue={value||""} placeholder={placeholder||""} rows={rows} style={sx} />;
 }
-) {
-  const ref = React.useRef(null);
-  const composing = React.useRef(false);
-  React.useEffect(() => {
-    if (ref.current && ref.current !== document.activeElement) {
-      ref.current.value = value || "";
-    }
-  }, [value]);
-  return <textarea
-    ref={ref}
-    defaultValue={value||""}
-    placeholder={placeholder}
-    rows={rows}
-    style={sx}
-    onCompositionStart={() => { composing.current = true; }}
-    onCompositionEnd={e => { composing.current = false; onChange(e.target.value); }}
-    onInput={e => { if (!composing.current) onChange(e.target.value); }}
-  />;
-}
-) {
-  const [local, setLocal] = React.useState(value||"");
-  const composing = React.useRef(false);
-  const focused = React.useRef(false);
-  React.useEffect(() => {
-    if (!focused.current) setLocal(value||"");
-  }, [value]);
-  return <textarea
-    value={local}
-    placeholder={placeholder}
-    rows={rows}
-    style={sx}
-    onFocus={() => focused.current = true}
-    onBlur={e => { focused.current = false; onChange(e.target.value); }}
-    onCompositionStart={() => composing.current = true}
-    onCompositionEnd={e => { composing.current = false; setLocal(e.target.value); onChange(e.target.value); }}
-    onChange={e => { setLocal(e.target.value); if (!composing.current) onChange(e.target.value); }}
-  />;
-}
-
 function Inp({label,value,onChange,placeholder,type="text"}) {
   return <div style={{marginBottom:12}}>
     {label && <div style={{fontSize:11,color:C.muted,fontWeight:700,marginBottom:4}}>{label}</div>}
@@ -489,7 +451,7 @@ function AdminView({proposals, onStatusChange, onDelete, onRefresh}) {
 }
 
 
-// ── Work report ───────────────────────────────────────────────
+// Work report
 async function loadWorkReports() {
   const v = await fbLoad("work_reports/all"); return v ? Object.values(v) : [];
 }
