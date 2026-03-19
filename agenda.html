@@ -763,6 +763,9 @@ ${urg.length===0?"<p class='i1'>（無）</p>":propBlock(urg,true)}
 </body></html>`;
 }
 
+const STEPS=["上傳紀錄","議程資訊","計畫現況","列管事項","提案整合","預覽下載"];
+
+
 function App() {
   const [step,setStep]=useState(0);
   const [view,setView]=useState("main");
