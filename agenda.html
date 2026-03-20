@@ -927,73 +927,138 @@ function App() {
     if (!tracked.length) { alert("沒有繼續列管的事項"); return; }
     try {
       if (!initDocx()) throw new Error("docx 程式庫未載入");
-      const { Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell, WidthType, BorderStyle, ShadingType, VerticalAlign } = window.docx;
+      const { Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell,
+              WidthType, BorderStyle, ShadingType, VerticalAlign, AlignmentType } = window.docx;
+
       const KAI = "標楷體";
       const PT = n => n * 2;
-      const sp = (b=0,a=0) => ({before:b,after:a,line:320,lineRule:"exact"});
-      const bThin = { style: BorderStyle.SINGLE, size: 4, color: "000000" };
-      const allBdr = b => ({top:b,bottom:b,left:b,right:b});
-      const hdrBdr = allBdr({ style: BorderStyle.SINGLE, size: 4, color: "4472C4" });
+      // Match original: line 280 for header/title, 400 for content
+      const sp = (line=400) => ({ line, lineRule:"exact" });
+      const bThin = { style: BorderStyle.SINGLE, size: 4, color: "auto" };
+      const allBdr = b => ({ top:b, bottom:b, left:b, right:b });
+      const tblBdr = allBdr(bThin);
+      const GREEN = "C5E0B3"; // from original
 
-      const mkCell = (text, w, opts={}) => {
-        const { bold=false, size=12, shade, span } = opts;
-        return new TableCell({
-          width: { size: w, type: WidthType.DXA },
-          borders: allBdr(bThin),
-          shading: shade ? { fill: shade, type: ShadingType.CLEAR } : undefined,
-          columnSpan: span,
-          margins: { top:60, bottom:60, left:180, right:180 },
-          children: [new Paragraph({ spacing: sp(30,30),
-            children: [new TextRun({ text: String(text||""), font:KAI, size:PT(size), bold })] })]
+      // Table width & col widths (match original exactly)
+      const TW  = 11624;
+      const cw  = [1560, 2727, 7337]; // 項次, 案由, 辦理情形
+
+      // Helper: make a paragraph
+      const mkP = (text, opts={}) => {
+        const { bold=false, size=12, align=AlignmentType.LEFT, line=400, before=0, after=0, indent=0 } = opts;
+        return new Paragraph({
+          alignment: align,
+          spacing: { line, lineRule:"exact", before, after },
+          indent: indent ? { left: indent } : undefined,
+          children: [new TextRun({ text: String(text||""), font: KAI, size: PT(size), bold })]
         });
       };
-      const hdrCell = (text, w) => new TableCell({
-        width: { size: w, type: WidthType.DXA },
-        borders: hdrBdr,
-        shading: { fill: "BDD7EE", type: ShadingType.CLEAR },
-        margins: { top:60, bottom:60, left:180, right:180 },
-        children: [new Paragraph({ spacing: sp(30,30),
-          children: [new TextRun({ text, font:KAI, size:PT(12), bold:true, color:"1F3864" })] })]
+
+      // Helper: make a table cell
+      const mkCell = (paras, w, opts={}) => {
+        const { shade, bold=false, valign=VerticalAlign.TOP, span } = opts;
+        const children = Array.isArray(paras) ? paras : [paras];
+        return new TableCell({
+          width: { size: w, type: WidthType.DXA },
+          borders: tblBdr,
+          shading: shade ? { fill: shade, type: ShadingType.CLEAR } : undefined,
+          verticalAlign: valign,
+          columnSpan: span,
+          margins: { top: 60, bottom: 60, left: 120, right: 120 },
+          children
+        });
+      };
+
+      // Group items by meeting source
+      const groups = {};
+      tracked.forEach(item => {
+        // Extract meeting identifier from source
+        const src = item.source || "";
+        const m = src.match(/健康台灣深耕計劃第([^次]*)次工作會議/);
+        const meetKey = m ? `健康台灣深耕計劃第${m[1]}次工作會議` : (src || "其他");
+        if (!groups[meetKey]) groups[meetKey] = [];
+        groups[meetKey].push(item);
       });
 
-      const TW = 9293; // table width
-      const cw = [1800, 1800, 3200, TW-1800-1800-3200]; // 來源, 案由, 決議, 辦理情形
+      const rows = [];
 
-      const rows = [
-        new TableRow({ children: [
-          hdrCell("來源", cw[0]), hdrCell("案由", cw[1]),
-          hdrCell("決議事項摘要", cw[2]), hdrCell("本次辦理情形", cw[3])
-        ]}),
-        ...tracked.map(item => {
-          const handling = item.mode==="decision" ? "依決議辦理。" : (item.customText?.trim()||"（待填寫）");
-          return new TableRow({ children: [
-            mkCell(item.source||"", cw[0]),
-            mkCell(item.caseTitle||"", cw[1]),
-            mkCell(item.content||"", cw[2]),
-            mkCell(handling, cw[3], { shade:"DEEAF1" }),
-          ]});
-        })
-      ];
+      Object.entries(groups).forEach(([meetName, items]) => {
+        // Row 0: meeting title spanning all cols (green bg, line 280)
+        rows.push(new TableRow({ children: [
+          mkCell(
+            mkP(meetName, { bold:true, size:12, align:AlignmentType.LEFT, line:280 }),
+            TW, { shade: GREEN, span: 3 }
+          )
+        ]}));
+
+        // Row 1: column headers (green bg, line 280)
+        rows.push(new TableRow({ children: [
+          mkCell(mkP("項次", { bold:true, size:12, line:280, align:AlignmentType.CENTER }), cw[0], { shade:GREEN }),
+          mkCell(mkP("案由", { bold:true, size:12, line:280 }), cw[1], { shade:GREEN }),
+          mkCell(
+            mkP(`${new Date().toLocaleDateString("zh-TW",{year:"numeric",month:"2-digit",day:"2-digit"})}會議追蹤辦理情形`,
+              { bold:true, size:12, line:280 }),
+            cw[2], { shade:GREEN }
+          ),
+        ]}));
+
+        // Data rows
+        items.forEach(item => {
+          const handling = item.mode==="decision"
+            ? "依決議辦理。"
+            : (item.customText?.trim() || "（待填寫）");
+
+          // 項次: source (without meeting name prefix)
+          const srcShort = (item.source||"")
+            .replace(/健康台灣深耕計劃第[^次]*次工作會議\s*/, "")
+            .trim() || item.source || "";
+
+          // 辦理情形 cell: first line is checkbox status, then content
+          const isManaged = item.include !== false;
+          const checkLine = isManaged ? "□解除列管☑繼續列管" : "☑解除列管□繼續列管";
+
+          rows.push(new TableRow({ children: [
+            // 項次
+            mkCell(mkP(srcShort, { size:12, align:AlignmentType.LEFT, line:400 }), cw[0]),
+            // 案由
+            mkCell(mkP(item.caseTitle||"", { size:12, line:400 }), cw[1]),
+            // 辦理情形
+            mkCell([
+              mkP(checkLine, { size:12, line:280, before:0, after:40 }),
+              mkP(handling, { size:12, line:400 }),
+            ], cw[2]),
+          ]}));
+        });
+      });
 
       const doc = new Document({
-        styles:{ default:{ document:{ run:{ font:KAI, size:24 } } } },
-        sections:[{
-          properties:{ page:{ size:{width:11906,height:16838}, margin:{top:794,right:1418,bottom:623,left:1795} } },
-          children:[
-            new Paragraph({ alignment:"center", spacing:sp(0,200),
-              children:[new TextRun({text:"歷次決議辦理情形", font:KAI, size:PT(14), bold:true})] }),
-            new Table({ width:{size:TW, type:WidthType.DXA}, columnWidths:cw, rows })
+        styles: { default: { document: { run: { font: KAI, size: PT(12) } } } },
+        sections: [{
+          properties: {
+            page: {
+              size: { width: 11906, height: 16838 },
+              margin: { top: 720, right: 282, bottom: 567, left: 720 }
+            }
+          },
+          children: [
+            new Table({
+              width: { size: TW, type: WidthType.DXA },
+              indent: { size: -459, type: WidthType.DXA },
+              columnWidths: cw,
+              rows
+            })
           ]
         }]
       });
+
       const blob = await Packer.toBlob(doc);
       const url = URL.createObjectURL(blob);
-      const a = document.createElement("a"); a.href=url;
-      a.download="歷次決議辦理情形.docx"; a.click(); URL.revokeObjectURL(url);
+      const a = document.createElement("a");
+      a.href = url; a.download = "歷次決議辦理情形.docx"; a.click();
+      URL.revokeObjectURL(url);
       setGenerated(true);
     } catch(e) { setErr("下載失敗："+e.message); console.error(e); }
   };
-
   const Dot = ({n}) => (
     <div style={{ display:"flex", flexDirection:"column", alignItems:"center", gap:3 }}>
       <div style={{ width:26, height:26, borderRadius:"50%", background:step>=n?C.ink:C.border,
