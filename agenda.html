@@ -736,6 +736,10 @@ function TrackedItemRow({ item, index, onUpdate, onRemove }) {
           <div style={S.lbl}>來源</div>
           <SourceSelector value={item.source||""} onChange={v=>onUpdate({source:v})}/>
         </div>
+        <div style={{ flex:"0 0 auto" }}>
+          <div style={S.lbl}>日期</div>
+          <input type="date" style={{ ...inp, width:140 }} value={item.meetingDate||""} onChange={e=>onUpdate({meetingDate:e.target.value})}/>
+        </div>
         <div style={{ flex:1, minWidth:160 }}>
           <div style={S.lbl}>案由</div>
           <input style={inp} value={item.caseTitle||""} onChange={e=>onUpdate({caseTitle:e.target.value})} placeholder="例：合約書研擬"/>
@@ -848,6 +852,7 @@ const STEPS = ["列管事項確認"];
 
 function App() {
   const [step, setStep] = useState(0);
+  const [meetingDate, setMeetingDate] = useState("");
   const [view, setView] = useState("main");
   const [loading, setLoading] = useState("");
   const [err, setErr] = useState("");
@@ -932,31 +937,40 @@ function App() {
 
       const KAI = "標楷體";
       const PT = n => n * 2;
-      // Match original: line 280 for header/title, 400 for content
-      const sp = (line=400) => ({ line, lineRule:"exact" });
+      const sp = (line=400, before=0, after=0) => ({ line, lineRule:"exact", before, after });
       const bThin = { style: BorderStyle.SINGLE, size: 4, color: "auto" };
       const allBdr = b => ({ top:b, bottom:b, left:b, right:b });
       const tblBdr = allBdr(bThin);
-      const GREEN = "C5E0B3"; // from original
+      const GREEN = "C5E0B3";
 
-      // Table width & col widths (match original exactly)
-      const TW  = 11624;
-      const cw  = [1560, 2727, 7337]; // 項次, 案由, 辦理情形
+      // ── 格式設定 ──────────────────────────────────────
+      const TW = 11550; // 改為 11550 DXA
+      const cw = [Math.floor(11550*0.135), Math.floor(11550*0.235), 11550-Math.floor(11550*0.135)-Math.floor(11550*0.235)];
 
-      // Helper: make a paragraph
-      const mkP = (text, opts={}) => {
-        const { bold=false, size=12, align=AlignmentType.LEFT, line=400, before=0, after=0, indent=0 } = opts;
+      // 日期格式轉換：YYYY-MM-DD → 民國XXX年MM月DD日
+      const fmtDate = (iso) => {
+        if (!iso) return "";
+        const [y, m, d] = iso.split("-");
+        const roc = parseInt(y) - 1911;
+        return `${roc}年${parseInt(m)}月${parseInt(d)}日`;
+      };
+
+      const mkRun = (text, bold=false, size=12) =>
+        new TextRun({ text: String(text||""), font: KAI, size: PT(size), bold });
+
+      const mkP = (runs, opts={}) => {
+        const { align=AlignmentType.LEFT, line=400, before=0, after=0, indent=0 } = opts;
+        const children = Array.isArray(runs) ? runs : [mkRun(runs, opts.bold, opts.size||12)];
         return new Paragraph({
           alignment: align,
           spacing: { line, lineRule:"exact", before, after },
           indent: indent ? { left: indent } : undefined,
-          children: [new TextRun({ text: String(text||""), font: KAI, size: PT(size), bold })]
+          children
         });
       };
 
-      // Helper: make a table cell
       const mkCell = (paras, w, opts={}) => {
-        const { shade, bold=false, valign=VerticalAlign.TOP, span } = opts;
+        const { shade, valign=VerticalAlign.TOP, span } = opts;
         const children = Array.isArray(paras) ? paras : [paras];
         return new TableCell({
           width: { size: w, type: WidthType.DXA },
@@ -969,10 +983,9 @@ function App() {
         });
       };
 
-      // Group items by meeting source
+      // Group by meeting source
       const groups = {};
       tracked.forEach(item => {
-        // Extract meeting identifier from source
         const src = item.source || "";
         const m = src.match(/健康台灣深耕計劃第([^次]*)次工作會議/);
         const meetKey = m ? `健康台灣深耕計劃第${m[1]}次工作會議` : (src || "其他");
@@ -983,50 +996,52 @@ function App() {
       const rows = [];
 
       Object.entries(groups).forEach(([meetName, items]) => {
-        // Row 0: meeting title spanning all cols (green bg, line 280)
+        // 會議標題列
         rows.push(new TableRow({ children: [
-          mkCell(
-            mkP(meetName, { bold:true, size:12, align:AlignmentType.LEFT, line:280 }),
-            TW, { shade: GREEN, span: 3 }
-          )
+          mkCell(mkP(meetName, { bold:true, size:12, line:280 }), TW, { shade: GREEN, span: 3 })
         ]}));
 
-        // Row 1: column headers (green bg, line 280)
+        // 欄位標題列 ── 日期欄位取第一筆有日期的 item
+        const anyDate = items.find(i=>i.meetingDate)?.meetingDate || "";
+        const dateLabel = anyDate ? fmtDate(anyDate)+"會議追蹤辦理情形" : "本次會議追蹤辦理情形";
         rows.push(new TableRow({ children: [
           mkCell(mkP("項次", { bold:true, size:12, line:280, align:AlignmentType.CENTER }), cw[0], { shade:GREEN }),
           mkCell(mkP("案由", { bold:true, size:12, line:280 }), cw[1], { shade:GREEN }),
-          mkCell(
-            mkP(`${new Date().toLocaleDateString("zh-TW",{year:"numeric",month:"2-digit",day:"2-digit"})}會議追蹤辦理情形`,
-              { bold:true, size:12, line:280 }),
-            cw[2], { shade:GREEN }
-          ),
+          mkCell(mkP(dateLabel, { bold:true, size:12, line:280 }), cw[2], { shade:GREEN }),
         ]}));
 
-        // Data rows
+        // 資料列
         items.forEach(item => {
           const handling = item.mode==="decision"
             ? "依決議辦理。"
             : (item.customText?.trim() || "（待填寫）");
 
-          // 項次: source (without meeting name prefix)
           const srcShort = (item.source||"")
             .replace(/健康台灣深耕計劃第[^次]*次工作會議\s*/, "")
             .trim() || item.source || "";
 
-          // 辦理情形 cell: first line is checkbox status, then content
           const isManaged = item.include !== false;
           const checkLine = isManaged ? "□解除列管☑繼續列管" : "☑解除列管□繼續列管";
 
+          // 辦理情形：拆分 (一)(二) 等換行
+          const handlingLines = handling
+            .replace(/([（(][一二三四五六七八九十]+[）)])/g, "\n$1")
+            .trim()
+            .split("\n")
+            .filter(l=>l.trim());
+
+          const handlingParas = [
+            mkP(checkLine, { size:12, line:280, after:40 }),
+            // 不加「本次辦理情形：」標籤，直接顯示內容
+            ...handlingLines.map((line, li) =>
+              mkP(line.trim(), { size:12, line:400, before: li===0?0:40 })
+            ),
+          ];
+
           rows.push(new TableRow({ children: [
-            // 項次
-            mkCell(mkP(srcShort, { size:12, align:AlignmentType.LEFT, line:400 }), cw[0]),
-            // 案由
+            mkCell(mkP(srcShort, { size:12, line:400 }), cw[0]),
             mkCell(mkP(item.caseTitle||"", { size:12, line:400 }), cw[1]),
-            // 辦理情形
-            mkCell([
-              mkP(checkLine, { size:12, line:280, before:0, after:40 }),
-              mkP(handling, { size:12, line:400 }),
-            ], cw[2]),
+            mkCell(handlingParas, cw[2]),
           ]}));
         });
       });
@@ -1059,6 +1074,7 @@ function App() {
       setGenerated(true);
     } catch(e) { setErr("下載失敗："+e.message); console.error(e); }
   };
+
   const Dot = ({n}) => (
     <div style={{ display:"flex", flexDirection:"column", alignItems:"center", gap:3 }}>
       <div style={{ width:26, height:26, borderRadius:"50%", background:step>=n?C.ink:C.border,
