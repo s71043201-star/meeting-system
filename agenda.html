@@ -1073,57 +1073,17 @@ function App() {
         });
       });
 
-      const doc = new Document({
-        styles: { default: { document: { run: { font: KAI, size: PT(12) } } } },
-        sections: [{
-          properties: {
-            page: {
-              size: { width: 11906, height: 16838 },
-              margin: { top: 720, right: 282, bottom: 567, left: 720 }
-            }
-          },
-          children: [
-            new Table({
-              width: { size: TW, type: WidthType.DXA },
-              indent: { size: -459, type: WidthType.DXA },
-              columnWidths: cw,
-              rows
-            }),
-            // 摘要筆記（isNote items）輸出在表格下方
-            ...(() => {
-              const notes = allItems.filter(i=>i.isNote && (i.caseTitle||i.customText));
-              if (!notes.length) return [];
-              const noteParas = [
-                new Paragraph({ spacing:{ line:240, lineRule:"exact", before:240 }, children:[] })
-              ];
-              notes.forEach(note => {
-                noteParas.push(new Paragraph({
-                  spacing: { line:240, lineRule:"exact", before:0, after:0 },
-                  children: [new TextRun({ text: note.source || "（報告事項、討論事項、臨時動議）第（X）案", font: KAI, size: PT(12) })]
-                }));
-                noteParas.push(new Paragraph({
-                  spacing: { line:240, lineRule:"exact", before:0, after:0 },
-                  children: [new TextRun({ text: "案由（複製標題）：" + (note.caseTitle||""), font: KAI, size: PT(12) })]
-                }));
-                noteParas.push(new Paragraph({
-                  spacing: { line:240, lineRule:"exact", before:0, after:120 },
-                  children: [new TextRun({ text: "會議決議（複製內容）：" + (note.customText||""), font: KAI, size: PT(12) })]
-                }));
-              });
-              return noteParas;
-            })()
-          ]
-        }]
-      });
-
       // 摘要筆記段落（表格後）
+      const { Paragraph: P2, TextRun: TR2 } = window.docx;
       const notes = allItems.filter(i=>i.isNote && (i.caseTitle||i.customText));
-      const noteParas = [];
+      const noteParas = [
+        new Paragraph({ spacing:{line:240,lineRule:"exact"}, children:[new TextRun({text:"", font:KAI, size:PT(12)})] })
+      ];
       notes.forEach(note => {
         const secLabel = `（${note.noteSection||"報告事項、討論事項、臨時動議"}）第（${note.noteNum||"X"}）案`;
         noteParas.push(new Paragraph({ spacing:{line:240,lineRule:"exact"}, children:[new TextRun({text:secLabel, font:KAI, size:PT(12), bold:true, color:"FF0000"})] }));
-        noteParas.push(new Paragraph({ spacing:{line:240,lineRule:"exact"}, children:[new TextRun({text:`案由（複製標題）：${note.caseTitle||""}`, font:KAI, size:PT(12)})] }));
-        noteParas.push(new Paragraph({ spacing:{line:240,lineRule:"exact"}, children:[new TextRun({text:`會議決議（複製內容）：${note.customText||""}`, font:KAI, size:PT(12)})] }));
+        noteParas.push(new Paragraph({ spacing:{line:240,lineRule:"exact"}, children:[new TextRun({text:"案由（複製標題）：" + (note.caseTitle||""), font:KAI, size:PT(12)})] }));
+        noteParas.push(new Paragraph({ spacing:{line:240,lineRule:"exact"}, children:[new TextRun({text:"會議決議（複製內容）：" + (note.customText||""), font:KAI, size:PT(12)})] }));
         noteParas.push(new Paragraph({ spacing:{line:240,lineRule:"exact"}, children:[new TextRun({text:"", font:KAI, size:PT(12)})] }));
       });
 
@@ -1143,7 +1103,6 @@ function App() {
               columnWidths: cw,
               rows
             }),
-            new Paragraph({ spacing:{line:240,lineRule:"exact"}, children:[new TextRun({text:"", font:KAI, size:PT(12)})] }),
             ...noteParas
           ]
         }]
