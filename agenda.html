@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>會議議程製作系統｜健康台灣深耕計畫</title>
+<title>工作會議摘要系統｜健康台灣深耕計畫</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
@@ -639,28 +639,29 @@ const SECTION_TYPES = ["報告事項","討論事項","臨時動議"];
 const ITEM_NUMS = ["一","二","三","四","五","六","七","八","九","十","十一","十二","十三","十四","十五"];
 
 function SourceSelector({ value, onChange }) {
-  // Parse value: "第十六次 臨時動議三" → {meet:"第十六次", type:"臨時動議", num:"三"}
+  // Parse: "健康台灣深耕計劃第X次工作會議 臨時動議三" → {meetNum:"X", type:"臨時動議", num:"三"}
   const parse = (v) => {
-    const m = (v||"").match(/^(第[^\s]*次)\s*(報告事項|討論事項|臨時動議)(.*)/);
-    if (m) return { meet: m[1], type: m[2], num: m[3].trim() };
-    return { meet: "", type: "臨時動議", num: "" };
+    const m = (v||"").match(/健康台灣深耕計劃第([^次]*)次工作會議\s*(報告事項|討論事項|臨時動議)(.*)/);
+    if (m) return { meetNum: m[1], type: m[2], num: m[3].trim() };
+    return { meetNum: "", type: "臨時動議", num: "" };
   };
-  const compose = (meet, type, num) => `${meet} ${type}${num}`;
-  const { meet, type, num } = parse(value);
-
+  const compose = (meetNum, type, num) =>
+    meetNum ? `健康台灣深耕計劃第${meetNum}次工作會議 ${type}${num}` : "";
+  const { meetNum, type, num } = parse(value);
   const sel = { border:`1px solid ${C.border}`, padding:"4px 6px", fontSize:11, background:C.cream, fontFamily:"inherit", borderRadius:1 };
+  const inp = { ...sel, width:36, textAlign:"center" };
 
   return (
     <div style={{ display:"flex", gap:4, flexWrap:"wrap", alignItems:"center" }}>
-      <select style={sel} value={meet} onChange={e=>onChange(compose(e.target.value, type, num))}>
-        <option value="">—選擇次數—</option>
-        {MEETING_NUMS.map(n=><option key={n} value={n}>{n}</option>)}
-      </select>
-      <select style={sel} value={type} onChange={e=>onChange(compose(meet, e.target.value, num))}>
+      <span style={{ fontSize:11, color:C.muted, whiteSpace:"nowrap" }}>健康台灣深耕計劃第</span>
+      <input style={inp} value={meetNum} onChange={e=>onChange(compose(e.target.value, type, num))}
+        placeholder="18" maxLength={4}/>
+      <span style={{ fontSize:11, color:C.muted }}>次工作會議</span>
+      <select style={sel} value={type} onChange={e=>onChange(compose(meetNum, e.target.value, num))}>
         {SECTION_TYPES.map(t=><option key={t} value={t}>{t}</option>)}
       </select>
-      <select style={sel} value={num} onChange={e=>onChange(compose(meet, type, e.target.value))}>
-        <option value="">—選擇項目—</option>
+      <select style={sel} value={num} onChange={e=>onChange(compose(meetNum, type, e.target.value))}>
+        <option value="">—項目—</option>
         {ITEM_NUMS.map(n=><option key={n} value={n}>第{n}案</option>)}
       </select>
     </div>
@@ -705,6 +706,24 @@ function TrackedItemRow({ item, index, onUpdate, onRemove }) {
   };
 
   const inp = { width:"100%", border:`1px solid ${C.border}`, padding:"5px 7px", fontSize:12, background:C.cream, fontFamily:"inherit", borderRadius:1 };
+
+  // Note-only view
+  if (item.isNote) return (
+    <div style={{ ...S.ibox, marginBottom:12, position:"relative", borderLeft:`3px solid #5d3a9a` }}>
+      <button onClick={onRemove} style={{ position:"absolute", top:8, right:10, background:"none", border:"none", cursor:"pointer", color:"#ccc", fontSize:16 }}>✕</button>
+      <div style={{ fontSize:11, color:"#5d3a9a", fontWeight:700, marginBottom:6 }}>📝 摘要筆記</div>
+      <div style={{ marginBottom:6 }}>
+        <div style={S.lbl}>標題（選填）</div>
+        <input style={inp} value={item.caseTitle||""} onChange={e=>onUpdate({caseTitle:e.target.value})} placeholder="例：本次重要討論事項"/>
+      </div>
+      <div>
+        <div style={S.lbl}>內容</div>
+        <textarea style={{ ...inp, resize:"vertical", minHeight:80 }}
+          value={item.customText||""} onChange={e=>onUpdate({customText:e.target.value})}
+          placeholder="自由填寫任何摘要內容，不會列入列管事項追蹤"/>
+      </div>
+    </div>
+  );
 
   return (
     <div style={{ ...S.ibox, marginBottom:12, position:"relative",
@@ -889,6 +908,13 @@ function App() {
     setSuggested(newSuggested);
     triggerAutoSave([...managed, ...newSuggested]);
   };
+  const addNote = () => {
+    const newItem = { id:`n${Date.now()}`, source:"", caseTitle:"", content:"",
+      include:true, mode:"custom", customText:"", isNote:true, needsManagement:false };
+    const newSuggested = [...suggested, newItem];
+    setSuggested(newSuggested);
+    triggerAutoSave([...managed, ...newSuggested]);
+  };
   const clearAll = () => {
     if (!window.confirm("確定要清除所有列管事項？")) return;
     setManaged([]); setSuggested([]);
@@ -897,7 +923,7 @@ function App() {
 ;
 
   const handleGenerate = async () => {
-    const tracked = allItems.filter(i=>i.include!==false);
+    const tracked = allItems.filter(i=>i.include!==false && !i.isNote);
     if (!tracked.length) { alert("沒有繼續列管的事項"); return; }
     try {
       if (!initDocx()) throw new Error("docx 程式庫未載入");
@@ -983,7 +1009,7 @@ function App() {
       <div style={{ background:C.ink, color:"#e8dfc8", padding:"22px 36px 16px", borderBottom:`3px solid ${C.gold}` }}>
         <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between" }}>
           <div>
-            <div style={{ fontSize:19, fontWeight:700, letterSpacing:".12em" }}>會議議程製作系統</div>
+            <div style={{ fontSize:19, fontWeight:700, letterSpacing:".12em" }}>工作會議摘要系統</div>
             <div style={{ fontSize:11, marginTop:3, opacity:.65 }}>健康台灣深耕計畫　內部工作會議</div>
           </div>
           <button style={{ ...S.btnO, fontSize:12, padding:"6px 14px", color:"#e8dfc8", borderColor:"rgba(255,255,255,0.3)" }}
@@ -1078,7 +1104,8 @@ function App() {
                   ))}
 
                   <div style={{ display:"flex", gap:8, alignItems:"center", marginTop: allItems.length?8:0, flexWrap:"wrap" }}>
-                    <button style={{ ...S.btnS(), fontSize:12 }} onClick={addItem}>＋ 新增一筆</button>
+                    <button style={{ ...S.btnS(), fontSize:12 }} onClick={addItem}>＋ 新增列管事項</button>
+                    <button style={{ ...S.btnS("#5d3a9a"), fontSize:12 }} onClick={addNote}>＋ 新增空白摘要筆記</button>
                     {allItems.length>0 && <button style={{ ...S.btnO, fontSize:11, padding:"4px 10px", color:"#c62828", borderColor:"#c62828" }} onClick={clearAll}>🗑 清除全部</button>}
                     {cloudSaved && <span style={{ fontSize:11, color:C.green }}>✓ 已自動儲存至雲端</span>}
                   </div>
