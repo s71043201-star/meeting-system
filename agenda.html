@@ -680,16 +680,22 @@ function TrackedItemRow({ item, index, onUpdate, onRemove }) {
       const res = await fetch(API, {
         method:"POST", headers:{"Content-Type":"application/json"},
         body: JSON.stringify({
-          model:"claude-sonnet-4-20250514", max_tokens:1000,
+          model:"claude-sonnet-4-5", max_tokens:1000,
           system:"你是擅長撰寫公文的秘書。根據提供的「決議事項摘要」與「口語說明」，撰寫正式公文格式的「本次辦理情形」。要求：1.語氣正式、條理清晰、繁體中文 2.直接輸出辦理情形文字 3.若口語說明提到具體進度、人名、日期，務必納入 4.長度2-5句話",
           messages:[{role:"user", content:"決議事項摘要："+decision+"\n\n口語說明："+oral+"\n\n請根據以上內容，撰寫本次辦理情形："}]
         })
       });
-      const d = await res.json();
+      const raw = await res.text();
+      console.log("API raw response:", raw);
+      let d;
+      try { d = JSON.parse(raw); } catch(e) { alert("API 回應非 JSON：" + raw.slice(0,300)); setAiLoading(false); return; }
+      console.log("API parsed:", JSON.stringify(d));
+      if (d.error) { alert("API 錯誤 " + res.status + "：" + (d.error.message||JSON.stringify(d.error))); setAiLoading(false); return; }
+      if (!d.content) { alert("API 回應缺少 content。完整回應：" + JSON.stringify(d).slice(0,400)); setAiLoading(false); return; }
       const result = d.content?.[0]?.text?.trim() || "";
       if (result) setPreview(result);
-      else alert("AI 未返回內容，請稍後再試");
-    } catch(e) { alert("AI 整理失敗："+e.message); }
+      else alert("content 存在但 text 為空。content：" + JSON.stringify(d.content).slice(0,200));
+    } catch(e) { alert("fetch 失敗：" + e.message); }
     setAiLoading(false);
   };
 
