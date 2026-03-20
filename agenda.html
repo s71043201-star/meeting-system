@@ -708,19 +708,35 @@ function TrackedItemRow({ item, index, onUpdate, onRemove }) {
   const inp = { width:"100%", border:`1px solid ${C.border}`, padding:"5px 7px", fontSize:12, background:C.cream, fontFamily:"inherit", borderRadius:1 };
 
   // Note-only view
+  const sel = { border:`1px solid ${C.border}`, padding:"4px 6px", fontSize:11, background:C.cream, fontFamily:"inherit", borderRadius:1 };
   if (item.isNote) return (
-    <div style={{ ...S.ibox, marginBottom:12, position:"relative", borderLeft:`3px solid #5d3a9a` }}>
+    <div style={{ ...S.ibox, marginBottom:12, position:"relative", borderLeft:"3px solid #5d3a9a" }}>
       <button onClick={onRemove} style={{ position:"absolute", top:8, right:10, background:"none", border:"none", cursor:"pointer", color:"#ccc", fontSize:16 }}>✕</button>
-      <div style={{ fontSize:11, color:"#5d3a9a", fontWeight:700, marginBottom:6 }}>📝 摘要筆記</div>
-      <div style={{ marginBottom:6 }}>
-        <div style={S.lbl}>標題（選填）</div>
-        <input style={inp} value={item.caseTitle||""} onChange={e=>onUpdate({caseTitle:e.target.value})} placeholder="例：本次重要討論事項"/>
+      <div style={{ fontSize:11, color:"#5d3a9a", fontWeight:700, marginBottom:8 }}>📝 摘要筆記</div>
+      {/* 事項類型 + 案號 */}
+      <div style={{ display:"flex", gap:6, alignItems:"center", marginBottom:8, flexWrap:"wrap" }}>
+        <span style={{ fontSize:11, color:C.muted }}>（</span>
+        <select style={sel} value={item.noteSection||"臨時動議"} onChange={e=>onUpdate({noteSection:e.target.value})}>
+          {["報告事項","討論事項","臨時動議"].map(t=><option key={t} value={t}>{t}</option>)}
+        </select>
+        <span style={{ fontSize:11, color:C.muted }}>）第（</span>
+        <select style={sel} value={item.noteNum||""} onChange={e=>onUpdate({noteNum:e.target.value})}>
+          <option value="">X</option>
+          {["一","二","三","四","五","六","七","八","九","十","十一","十二","十三","十四","十五"].map(n=><option key={n} value={n}>{n}</option>)}
+        </select>
+        <span style={{ fontSize:11, color:C.muted }}>）案</span>
       </div>
+      {/* 案由 */}
+      <div style={{ marginBottom:6 }}>
+        <div style={S.lbl}>案由（複製標題）</div>
+        <input style={inp} value={item.caseTitle||""} onChange={e=>onUpdate({caseTitle:e.target.value})} placeholder="例：診所二月核銷資料"/>
+      </div>
+      {/* 決議內容 */}
       <div>
-        <div style={S.lbl}>內容</div>
-        <textarea style={{ ...inp, resize:"vertical", minHeight:80 }}
+        <div style={S.lbl}>會議決議（複製內容）</div>
+        <textarea style={{ ...inp, resize:"vertical", minHeight:72 }}
           value={item.customText||""} onChange={e=>onUpdate({customText:e.target.value})}
-          placeholder="自由填寫任何摘要內容，不會列入列管事項追蹤"/>
+          placeholder="例：請社區駐點工作人員協助跑點發放診所2月核銷資料"/>
       </div>
     </div>
   );
@@ -1072,7 +1088,63 @@ function App() {
               indent: { size: -459, type: WidthType.DXA },
               columnWidths: cw,
               rows
-            })
+            }),
+            // 摘要筆記（isNote items）輸出在表格下方
+            ...(() => {
+              const notes = allItems.filter(i=>i.isNote && (i.caseTitle||i.customText));
+              if (!notes.length) return [];
+              const noteParas = [
+                new Paragraph({ spacing:{ line:240, lineRule:"exact", before:240 }, children:[] })
+              ];
+              notes.forEach(note => {
+                noteParas.push(new Paragraph({
+                  spacing: { line:240, lineRule:"exact", before:0, after:0 },
+                  children: [new TextRun({ text: note.source || "（報告事項、討論事項、臨時動議）第（X）案", font: KAI, size: PT(12) })]
+                }));
+                noteParas.push(new Paragraph({
+                  spacing: { line:240, lineRule:"exact", before:0, after:0 },
+                  children: [new TextRun({ text: "案由（複製標題）：" + (note.caseTitle||""), font: KAI, size: PT(12) })]
+                }));
+                noteParas.push(new Paragraph({
+                  spacing: { line:240, lineRule:"exact", before:0, after:120 },
+                  children: [new TextRun({ text: "會議決議（複製內容）：" + (note.customText||""), font: KAI, size: PT(12) })]
+                }));
+              });
+              return noteParas;
+            })()
+          ]
+        }]
+      });
+
+      // 摘要筆記段落（表格後）
+      const notes = allItems.filter(i=>i.isNote && (i.caseTitle||i.customText));
+      const noteParas = [];
+      notes.forEach(note => {
+        const secLabel = `（${note.noteSection||"報告事項、討論事項、臨時動議"}）第（${note.noteNum||"X"}）案`;
+        noteParas.push(new Paragraph({ spacing:{line:240,lineRule:"exact"}, children:[new TextRun({text:secLabel, font:KAI, size:PT(12), bold:true, color:"FF0000"})] }));
+        noteParas.push(new Paragraph({ spacing:{line:240,lineRule:"exact"}, children:[new TextRun({text:`案由（複製標題）：${note.caseTitle||""}`, font:KAI, size:PT(12)})] }));
+        noteParas.push(new Paragraph({ spacing:{line:240,lineRule:"exact"}, children:[new TextRun({text:`會議決議（複製內容）：${note.customText||""}`, font:KAI, size:PT(12)})] }));
+        noteParas.push(new Paragraph({ spacing:{line:240,lineRule:"exact"}, children:[new TextRun({text:"", font:KAI, size:PT(12)})] }));
+      });
+
+      const doc = new Document({
+        styles: { default: { document: { run: { font: KAI, size: PT(12) } } } },
+        sections: [{
+          properties: {
+            page: {
+              size: { width: 11906, height: 16838 },
+              margin: { top: 720, right: 282, bottom: 567, left: 720 }
+            }
+          },
+          children: [
+            new Table({
+              width: { size: TW, type: WidthType.DXA },
+              indent: { size: -459, type: WidthType.DXA },
+              columnWidths: cw,
+              rows
+            }),
+            new Paragraph({ spacing:{line:240,lineRule:"exact"}, children:[new TextRun({text:"", font:KAI, size:PT(12)})] }),
+            ...noteParas
           ]
         }]
       });
