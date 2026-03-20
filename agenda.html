@@ -980,13 +980,24 @@ function App() {
         });
       };
 
-      // 把文字按 (一)(二) 等拆成多段
+      // 把文字按 (一)(二) 等拆成多段，並加 hanging indent 對齊文字起始
       const splitParas = (text, opts={}) => {
         if (!text) return [mkP("", opts)];
-        // Split on (一)(二)...(十五) at start of segment
         const parts = text.replace(/([（(][一二三四五六七八九十百]+[）)])/g, "\n$1")
           .split("\n").map(s=>s.trim()).filter(Boolean);
-        return parts.length ? parts.map((p,i) => mkP(p, {...opts, before: i>0?40:0})) : [mkP(text, opts)];
+        if (!parts.length) return [mkP(text, opts)];
+        return parts.map((p, i) => {
+          // 有 (一)(二) 前綴的段落：hanging indent 讓第二行縮排對齊文字
+          const hasPrefix = /^[（(][一二三四五六七八九十百]+[）)]/.test(p);
+          const hangingAmt = hasPrefix ? 420 : 0; // ~2 全形字寬
+          const { bold=false, size=12, align=AlignmentType.LEFT } = opts;
+          return new Paragraph({
+            alignment: align,
+            spacing: { line:240, lineRule:"exact", before: i>0?40:0, after:0 },
+            indent: hangingAmt ? { left: hangingAmt, hanging: hangingAmt } : undefined,
+            children: [new TextRun({ text: p, font: KAI, size: PT(size), bold })]
+          });
+        });
       };
 
       // Group by meeting
