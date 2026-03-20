@@ -1002,9 +1002,11 @@ function App() {
       const rows = [];
 
       Object.entries(groups).forEach(([meetName, items]) => {
-        // 會議標題列（span 4）
+        // 會議標題列（span 4）：日期 + 會議名稱
+        const titleDate = items.find(i=>i.meetingDate)?.meetingDate || "";
+        const titleText = titleDate ? fmtDate(titleDate) + "　" + meetName : meetName;
         rows.push(new TableRow({ children: [
-          mkCell(mkP(meetName, { bold:true, size:12 }), TW, { shade: GREEN, span: 4 })
+          mkCell(mkP(titleText, { bold:true, size:12 }), TW, { shade: GREEN, span: 4 })
         ]}));
 
         // 欄位標題列
