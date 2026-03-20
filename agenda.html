@@ -819,6 +819,8 @@ function TrackedItemRow({ item, index, onUpdate, onRemove }) {
 }
 
 
+const STEPS = ["列管事項確認"];
+
 function App() {
   const [step, setStep] = useState(0);
   const [view, setView] = useState("main");
@@ -1013,7 +1015,7 @@ function App() {
                       if (!record) return alert("找不到存檔資料");
                       const emptyInfo = {org:"台北市醫師公會「健康台灣深耕計畫」",subtitle:"臺北市慢性病防治全人健康智慧整合照護計畫",meetingNo:record.title||"",theme:"",date:record.date||"",weekday:"",time:"",location:"",chair:"",dataDate:""};
                       await generateAndDownloadDocx(
-                        { info: emptyInfo, prescStats: null, clinics: DEFAULT_CLINICS, tracked: record.tracked||[], proposals: [], sectionData: {} },
+                        { info: emptyInfo, prescStats: null, clinics: [], tracked: record.tracked||[], proposals: [], sectionData: {} },
                         `${record.title}議程（存檔）.docx`
                       );
                     } catch(e) { alert("下載失敗："+e.message); }
