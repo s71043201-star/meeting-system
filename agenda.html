@@ -771,7 +771,7 @@ function TrackedItemRow({ item, index, onUpdate, onRemove }) {
       </div>
 
       {/* 繼續/解除 */}
-      <div style={{ display:"flex", gap:20, alignItems:"center", marginBottom: item.include!==false ? 10 : 0 }}>
+      <div style={{ display:"flex", gap:20, alignItems:"center", marginBottom:10 }}>
         <span style={{ fontSize:12, color:C.muted }}>本次決定：</span>
         {[["繼續列管",true],["解除列管",false]].map(([label,val])=>(
           <label key={label} style={{ display:"flex", alignItems:"center", gap:4, cursor:"pointer", fontSize:13,
@@ -783,9 +783,8 @@ function TrackedItemRow({ item, index, onUpdate, onRemove }) {
         ))}
       </div>
 
-      {/* 辦理情形（繼續列管才顯示）*/}
-      {item.include!==false && (
-        <div style={{ background:"#f8f5ee", border:`1px solid ${C.border}`, borderRadius:2, padding:"10px 12px" }}>
+      {/* 辦理情形（選填，繼續列管 & 解除列管皆可填寫）*/}
+      <div style={{ background:"#f8f5ee", border:`1px solid ${C.border}`, borderRadius:2, padding:"10px 12px" }}>
           <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:8 }}>
             <div style={{ fontSize:12, fontWeight:700, color:C.ink }}>本次辦理情形</div>
             <div style={{ display:"flex", gap:8 }}>
@@ -858,7 +857,6 @@ function TrackedItemRow({ item, index, onUpdate, onRemove }) {
             </div>
           )}
         </div>
-      )}
     </div>
   );
 }
@@ -1053,15 +1051,22 @@ function App() {
 
           const handling = item.mode==="decision"
             ? "依決議辦理。"
-            : (item.customText?.trim() || "（待填寫）");
+            : (item.customText?.trim() || "");
 
           const isManaged = item.include !== false;
-          const checkLine = isManaged ? "□解除列管☑繼續列管" : "☑解除列管□繼續列管";
+          let checkLine;
+          if (isManaged) {
+            checkLine = "□解除列管☑繼續列管";
+          } else {
+            checkLine = handling
+              ? `［解除列管，${handling}］`
+              : "☑解除列管□繼續列管";
+          }
 
           // 辦理情形：勾選 + 內容（(一)(二) 換行）
           const handlingParas = [
             mkP(checkLine, { size:12 }),
-            ...splitParas(handling, { size:12 }),
+            ...(isManaged ? splitParas(handling || "（待填寫）", { size:12 }) : []),
           ];
 
           rows.push(new TableRow({ children: [
