@@ -799,7 +799,12 @@ function TrackedItemRow({ item, index, onUpdate, onRemove }) {
           </div>
 
           {item.mode==="decision" && (
-            <div style={{ fontSize:12, color:"#555", fontStyle:"italic" }}>依決議辦理。</div>
+            <div>
+              <div style={{ fontSize:12, color:"#555", fontStyle:"italic", marginBottom:6 }}>依決議辦理。</div>
+              <div style={{ fontSize:11, color:C.muted, marginBottom:4 }}>補充說明（選填）</div>
+              <input style={inp} value={item.decisionNote||""} onChange={e=>onUpdate({decisionNote:e.target.value})}
+                placeholder="例：預計下週完成..."/>
+            </div>
           )}
 
           {item.mode==="custom" && (
@@ -1050,7 +1055,7 @@ function App() {
             .replace(/健康台灣深耕計劃第[^次]*次工作會議\s*/, "").trim() || item.source || "";
 
           const handling = item.mode==="decision"
-            ? "依決議辦理。"
+            ? ("依決議辦理。" + (item.decisionNote?.trim() ? item.decisionNote.trim() : ""))
             : (item.customText?.trim() || "");
 
           const isManaged = item.include !== false;
