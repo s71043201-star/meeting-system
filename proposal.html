@@ -50,7 +50,8 @@
 const { useState, useEffect, useRef, useCallback } = React;
 
 const ADMIN_PIN = "0000";
-const API = "https://claude-proxy.s71043201.workers.dev";
+const GEMINI_KEY = "AIzaSyBfI6QYTOpiwMNbq2_1aBq4VScxMnZ3BII";
+const API = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_KEY}`;
 
 // Firebase helpers
 const waitFirebase = () => new Promise(res => {
@@ -82,7 +83,7 @@ async function saveMembers(list) { await fbSave("members/list", list); }
 async function loadDeadline() { const v = await fbLoad("proposals/deadline"); return v || ""; }
 async function saveDeadline(iso) { await fbSave("proposals/deadline", iso); }
 
-// Claude API
+// Gemini API
 async function fileToBase64(file) {
   return new Promise((res, rej) => {
     const r = new FileReader();
@@ -109,19 +110,21 @@ async function parseProposalFile(file) {
     if (file.name.toLowerCase().endsWith(".pdf")) {
       const b64 = await fileToBase64(file);
       const res = await fetch(API, { method:"POST", headers:{"Content-Type":"application/json"},
-        body: JSON.stringify({ model:"claude-sonnet-4-20250514", max_tokens:1000,
-          messages:[{role:"user",content:[
-            {type:"document",source:{type:"base64",media_type:"application/pdf",data:b64}},
-            {type:"text",text:prompt}]}]})});
+        body: JSON.stringify({
+          contents:[{role:"user",parts:[
+            {inlineData:{mimeType:"application/pdf",data:b64}},
+            {text:prompt}]}],
+          generationConfig:{maxOutputTokens:1000}})});
       const d = await res.json();
-      return JSON.parse((d.content?.[0]?.text??"{}").replace(/```json\n?|```/g,"").trim());
+      return JSON.parse((d.candidates?.[0]?.content?.parts?.[0]?.text??"{}").replace(/```json\n?|```/g,"").trim());
     } else {
       const raw = await docxToText(file);
       const res = await fetch(API, { method:"POST", headers:{"Content-Type":"application/json"},
-        body: JSON.stringify({ model:"claude-sonnet-4-20250514", max_tokens:1000,
-          messages:[{role:"user",content:`${prompt}\n\n提案單內容：\n\n${raw}`}]})});
+        body: JSON.stringify({
+          contents:[{role:"user",parts:[{text:`${prompt}\n\n提案單內容：\n\n${raw}`}]}],
+          generationConfig:{maxOutputTokens:1000}})});
       const d = await res.json();
-      return JSON.parse((d.content?.[0]?.text??"{}").replace(/```json\n?|```/g,"").trim());
+      return JSON.parse((d.candidates?.[0]?.content?.parts?.[0]?.text??"{}").replace(/```json\n?|```/g,"").trim());
     }
   } catch { return null; }
 }
