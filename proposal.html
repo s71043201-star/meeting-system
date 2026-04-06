@@ -50,8 +50,7 @@
 const { useState, useEffect, useRef, useCallback } = React;
 
 const ADMIN_PIN = "0000";
-const GEMINI_KEY = "AIzaSyBfI6QYTOpiwMNbq2_1aBq4VScxMnZ3BII";
-const API = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_KEY}`;
+const API = "https://meetbot-backend.onrender.com/gemini-proxy";
 
 // Firebase helpers
 const waitFirebase = () => new Promise(res => {
