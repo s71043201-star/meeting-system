@@ -681,7 +681,7 @@ function TrackedItemRow({ item, index, onUpdate, onRemove }) {
       const res = await fetch(API, {
         method:"POST", headers:{"Content-Type":"application/json"},
         body: JSON.stringify({
-          model:"gemini-2.0-flash",
+
           systemInstruction:{parts:[{text:"你是公文秘書。根據口語說明撰寫簡短的本次辦理情形，1-2句話即可。不要重複決議事項的內容，只寫本次實際進展或辦理結果。直接輸出文字，不加任何說明或標題。"}]},
           contents:[{role:"user", parts:[{text:"決議事項摘要："+decision+"\n\n口語說明："+oral+"\n\n請根據以上內容，撰寫本次辦理情形："}]}],
           generationConfig:{maxOutputTokens:1000}
