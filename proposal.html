@@ -110,6 +110,7 @@ async function parseProposalFile(file) {
       const b64 = await fileToBase64(file);
       const res = await fetch(API, { method:"POST", headers:{"Content-Type":"application/json"},
         body: JSON.stringify({
+          model:"gemini-2.0-flash",
           contents:[{role:"user",parts:[
             {inlineData:{mimeType:"application/pdf",data:b64}},
             {text:prompt}]}],
@@ -120,6 +121,7 @@ async function parseProposalFile(file) {
       const raw = await docxToText(file);
       const res = await fetch(API, { method:"POST", headers:{"Content-Type":"application/json"},
         body: JSON.stringify({
+          model:"gemini-2.0-flash",
           contents:[{role:"user",parts:[{text:`${prompt}\n\n提案單內容：\n\n${raw}`}]}],
           generationConfig:{maxOutputTokens:1000}})});
       const d = await res.json();
