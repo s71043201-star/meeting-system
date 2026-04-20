@@ -525,6 +525,34 @@ function buildDocx(data) {
 const { useState, useEffect, useRef, useCallback } = React;
 const API = "https://meetbot-check-in-system.onrender.com/gemini-proxy";
 
+// 自動重試 fetch：503/429/5xx 時以指數退避方式重試
+async function fetchWithRetry(url, options, { maxRetries = 3, onRetry = null } = {}) {
+  let lastError = null;
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      const res = await fetch(url, options);
+      // 5xx 或 429 視為可重試錯誤
+      if ((res.status >= 500 || res.status === 429) && attempt < maxRetries) {
+        const waitMs = Math.pow(2, attempt + 1) * 1000; // 2s, 4s, 8s
+        if (onRetry) onRetry(attempt + 1, maxRetries, waitMs, res.status);
+        await new Promise(r => setTimeout(r, waitMs));
+        continue;
+      }
+      return res;
+    } catch (e) {
+      lastError = e;
+      if (attempt < maxRetries) {
+        const waitMs = Math.pow(2, attempt + 1) * 1000;
+        if (onRetry) onRetry(attempt + 1, maxRetries, waitMs, 0);
+        await new Promise(r => setTimeout(r, waitMs));
+        continue;
+      }
+      throw lastError;
+    }
+  }
+  throw lastError || new Error("fetchWithRetry: unexpected");
+}
+
 // ══ DOCX GENERATOR ══════════════════════════════════════════
 
 
@@ -670,6 +698,7 @@ function SourceSelector({ value, onChange }) {
 
 function TrackedItemRow({ item, index, onUpdate, onRemove }) {
   const [aiLoading, setAiLoading] = useState(false);
+  const [retryInfo, setRetryInfo] = useState(null); // {attempt, max, waitMs} 或 null
   const [preview, setPreview] = useState(null); // null = no preview, string = AI result
 
   const handleAI = async () => {
@@ -677,8 +706,9 @@ function TrackedItemRow({ item, index, onUpdate, onRemove }) {
     const decision = (item.content||"").trim();
     if (!oral && !decision) { alert("請先填寫決議事項摘要或另外說明再使用AI"); return; }
     setAiLoading(true);
+    setRetryInfo(null);
     try {
-      const res = await fetch(API, {
+      const res = await fetchWithRetry(API, {
         method:"POST", headers:{"Content-Type":"application/json"},
         body: JSON.stringify({
 
@@ -686,13 +716,19 @@ function TrackedItemRow({ item, index, onUpdate, onRemove }) {
           contents:[{role:"user", parts:[{text:"決議事項摘要："+decision+"\n\n口語說明："+oral+"\n\n請根據以上內容，撰寫本次辦理情形："}]}],
           generationConfig:{maxOutputTokens:1000}
         })
+      }, {
+        maxRetries: 3,
+        onRetry: (attempt, max, waitMs, status) => {
+          setRetryInfo({ attempt, max, waitMs, status });
+        }
       });
+      setRetryInfo(null);
       const raw = await res.text();
       console.log("API raw response:", raw);
       let d;
       try { d = JSON.parse(raw); } catch(e) { alert("API 回應非 JSON：" + raw.slice(0,300)); setAiLoading(false); return; }
       console.log("API parsed:", JSON.stringify(d));
-      if (d.error) { alert("API 錯誤 " + res.status + "：" + (d.error.message||JSON.stringify(d.error))); setAiLoading(false); return; }
+      if (d.error) { alert("API 錯誤 " + res.status + "：" + (d.error.message||JSON.stringify(d.error)) + "\n\n（已自動重試 3 次仍失敗，請稍後再試）"); setAiLoading(false); return; }
       if (!d.candidates) { alert("API 回應缺少 candidates。完整回應：" + JSON.stringify(d).slice(0,400)); setAiLoading(false); return; }
       const parts = d.candidates?.[0]?.content?.parts || [];
       const result = (parts.filter(p=>!p.thought).pop()?.text || parts[parts.length-1]?.text || "").trim();
@@ -700,6 +736,7 @@ function TrackedItemRow({ item, index, onUpdate, onRemove }) {
       else alert("content 存在但 text 為空。content：" + JSON.stringify(d.content).slice(0,200));
     } catch(e) { alert("fetch 失敗：" + e.message); }
     setAiLoading(false);
+    setRetryInfo(null);
   };
 
   const confirmPreview = () => {
@@ -828,7 +865,11 @@ function TrackedItemRow({ item, index, onUpdate, onRemove }) {
                 style={{ ...S.btnS(C.gold), fontSize:12, padding:"7px 16px",
                   marginBottom: preview?10:0, width:"100%", textAlign:"center" }}
                 onClick={handleAI} disabled={aiLoading}>
-                {aiLoading ? "⏳ AI 生成中，請稍候…" : "✦ AI 根據決議摘要＋口語說明 生成正式辦理情形"}
+                {aiLoading
+                  ? (retryInfo
+                      ? `⚠ 伺服器忙碌中，${Math.round(retryInfo.waitMs/1000)} 秒後重試（第 ${retryInfo.attempt}/${retryInfo.max} 次）…`
+                      : "⏳ AI 生成中，請稍候…")
+                  : "✦ AI 根據決議摘要＋口語說明 生成正式辦理情形"}
               </button>
 
               {/* 預覽區 */}

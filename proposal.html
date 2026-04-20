@@ -52,6 +52,29 @@ const { useState, useEffect, useRef, useCallback } = React;
 const ADMIN_PIN = "0000";
 const API = "https://meetbot-check-in-system.onrender.com/gemini-proxy";
 
+// 自動重試 fetch：5xx/429 時以指數退避方式重試（2s → 4s → 8s）
+async function fetchWithRetry(url, options, { maxRetries = 3 } = {}) {
+  let lastError = null;
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      const res = await fetch(url, options);
+      if ((res.status >= 500 || res.status === 429) && attempt < maxRetries) {
+        await new Promise(r => setTimeout(r, Math.pow(2, attempt + 1) * 1000));
+        continue;
+      }
+      return res;
+    } catch (e) {
+      lastError = e;
+      if (attempt < maxRetries) {
+        await new Promise(r => setTimeout(r, Math.pow(2, attempt + 1) * 1000));
+        continue;
+      }
+      throw lastError;
+    }
+  }
+  throw lastError || new Error("fetchWithRetry: unexpected");
+}
+
 // Firebase helpers
 const waitFirebase = () => new Promise(res => {
   if (window.firebaseReady) return res();
@@ -108,7 +131,7 @@ async function parseProposalFile(file) {
   try {
     if (file.name.toLowerCase().endsWith(".pdf")) {
       const b64 = await fileToBase64(file);
-      const res = await fetch(API, { method:"POST", headers:{"Content-Type":"application/json"},
+      const res = await fetchWithRetry(API, { method:"POST", headers:{"Content-Type":"application/json"},
         body: JSON.stringify({
 
           contents:[{role:"user",parts:[
@@ -119,7 +142,7 @@ async function parseProposalFile(file) {
       return JSON.parse((d.candidates?.[0]?.content?.parts?.[0]?.text??"{}").replace(/```json\n?|```/g,"").trim());
     } else {
       const raw = await docxToText(file);
-      const res = await fetch(API, { method:"POST", headers:{"Content-Type":"application/json"},
+      const res = await fetchWithRetry(API, { method:"POST", headers:{"Content-Type":"application/json"},
         body: JSON.stringify({
 
           contents:[{role:"user",parts:[{text:`${prompt}\n\n提案單內容：\n\n${raw}`}]}],
